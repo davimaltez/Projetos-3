@@ -23,8 +23,10 @@ Projetos 3 — Cliente: WXN Tecnologia
 
 
 ## Entregáveis: 
-[Drive](https://drive.google.com/drive/folders/1ykquLBLwWrdx76Ox1qSv1GSkKwa95A3F?usp=drive_link)
 
-##Site: 
+[Docs](https://drive.google.com/drive/folders/1ykquLBLwWrdx76Ox1qSv1GSkKwa95A3F?usp=drive_link)
+
+## Site: 
+
 [Google Site](https://sites.google.com/view/g11projetos3/in%C3%ADcio)
 
