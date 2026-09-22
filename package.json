@@ -1,0 +1,24 @@
+{
+  "name": "wxn-chatbot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chatbot de atendimento automatizado Grupo 11, CESAR School x WXN Tecnologia",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/app.ts",
+    "build": "tsc",
+    "start": "node dist/app.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
