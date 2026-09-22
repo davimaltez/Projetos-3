@@ -16,7 +16,7 @@ Projetos 3 — Cliente: WXN Tecnologia
 - Brenno Dornelas
 - Davi Maltez
 - Gabriel Orrico
-- Leticia Siqueira
+- Letícia Siqueira
 - Luis Alves
 - Luiz Lins
 - Sofia Villela
