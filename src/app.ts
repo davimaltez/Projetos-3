@@ -11,6 +11,7 @@ const app = express();
 const porta = Number(process.env.PORT ?? PORTA_PADRAO);
 
 app.use(express.static(path.join(__dirname, "..", "interface")));
+app.use("/assets", express.static(path.join(__dirname, "..", "assets")));
 
 app.get("/estou-vivo", (_req, res) => {
   res.sendFile(path.join(pastaInterface, "status.html"));
