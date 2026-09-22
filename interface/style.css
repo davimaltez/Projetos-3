@@ -1,0 +1,112 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0f1e;
+  background-image:
+    radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.15), transparent 60%),
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: auto, 40px 40px, 40px 40px;
+  color: #f8fafc;
+  font-family: system-ui, -apple-system, sans-serif;
+  padding: 2rem;
+}
+
+main {
+  width: 100%;
+}
+
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.robo {
+  width: 350px;
+  height: auto;
+  animation: float 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 24px rgba(99, 102, 241, 0.4));
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+.content {
+  text-align: left;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  font-size: 3rem;
+  margin: 0 0 0.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(90deg, #f8fafc, #94a3b8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+p {
+  color: #94a3b8;
+  margin: 0 0 1.5rem;
+  font-size: 1.1rem;
+}
+
+.cta {
+  display: inline-block;
+  padding: 0.7rem 1.4rem;
+  background: #6366f1;
+  color: #ffffff;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.cta:hover {
+  background: #4f46e5;
+  transform: translateY(-2px);
+}
+
+.cta:focus-visible {
+  outline: 2px solid #a5b4fc;
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .container {
+    flex-direction: column;
+    text-align: center;
+    gap: 1.5rem;
+  }
+  .content {
+    text-align: center;
+  }
+  h1 {
+    font-size: 2.25rem;
+  }
+}
