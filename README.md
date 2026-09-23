@@ -30,3 +30,7 @@ Projetos 3 — Cliente: WXN Tecnologia
 
 [Google Site](https://sites.google.com/view/g11projetos3/in%C3%ADcio)
 
+## Deploy da aplicação: 
+
+https://wxnchatbot.onrender.com/
+
