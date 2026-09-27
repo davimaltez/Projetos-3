@@ -1,4 +1,12 @@
 node_modules/
 dist/
-.env
 *.log
+
+# Variáveis de ambiente (chave da API, senha do banco). Só o .env.example vai pro Git.
+.env
+.env.*
+!.env.example
+
+# Sessão do WhatsApp conectado — NUNCA suba isso pro Git.
+# Quem tiver esses arquivos consegue mandar mensagens como esse número.
+auth_baileys/

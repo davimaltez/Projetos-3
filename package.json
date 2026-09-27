@@ -1,23 +1,36 @@
 {
   "name": "wxn-chatbot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Chatbot de atendimento automatizado Grupo 11, CESAR School x WXN Tecnologia",
+  "description": "Chatbot de atendimento automatizado Grupo 11, CESAR School x WXN Tecnologia — esqueleto andante com WhatsApp via Baileys (não oficial) e Postgres.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "tsx watch src/app.ts",
-    "build": "tsc",
-    "start": "node dist/app.js"
+    "dev:bot": "tsx src/app.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/app.js",
+    "typecheck": "tsc --noEmit",
+    "db:up": "docker compose up -d",
+    "db:reset": "docker compose down -v && docker compose up -d"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "@google/genai": "^2.24.0",
+    "@hapi/boom": "^10.0.1",
+    "baileys": "6.7.24",
+    "dotenv": "^16.4.5",
+    "express": "^4.22.3",
+    "pg": "^8.12.0",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
+    "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.6",
+    "@types/qrcode-terminal": "^0.12.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

@@ -1,0 +1,20 @@
+# Só para DESENVOLVIMENTO LOCAL. Na VM o Postgres é instalado nativamente
+# (decisão de arquitetura: nada de banco como serviço, nada de Docker em produção).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: wxn
+    ports:
+      # 127.0.0.1: o banco só aceita conexão da própria máquina,
+      # não fica exposto pra rede do café/da faculdade.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Aplica o schema automaticamente na PRIMEIRA subida (volume vazio).
+      # Mudou o schema? `npm run db:reset` (apaga os dados de dev).
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+volumes:
+  pgdata:
