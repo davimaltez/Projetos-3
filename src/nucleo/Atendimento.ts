@@ -5,6 +5,7 @@ import type { Menu } from "./Menu.js";
 import { mascararRemetente, resumirTextoParaLog } from "./PrivacidadeDeLog.js";
 import type {
   RepositorioDeClientes,
+  RepositorioDeContextoDoMenu,
   RepositorioDeConversas,
   RepositorioDeEventos,
   RepositorioDeMensagens,
@@ -25,7 +26,14 @@ interface Decisao {
   origem: OrigemDecisao;
   confianca: number | null;
   latenciaIaMs: number | null;
+  /** Texto a enviar quando difere do padrão (sub-menu, folha, menu de um nível). null = padrão. */
+  texto: string | null;
+  /** Nível do menu depois desta resposta (ids do topo até o nível atual). [] = menu principal. */
+  caminhoMenu: string[];
 }
+
+/** Valores das decisões que não passaram pela IA. */
+const SEM_IA = { confianca: null, latenciaIaMs: null } as const;
 
 /** Ajustes do atendimento, montados no app.ts. */
 export interface OpcoesDeAtendimento {
@@ -53,7 +61,7 @@ const TEXTO_DE_EXCESSO = "Recebi muitas mensagens em pouco tempo. Aguarde um mom
  * um ClassificadorDeIntencao. Tudo chega pelo construtor, inclusive o Menu.
  *
  * Ordem de decisão (da mais barata para a mais cara):
- *   1. número do menu → tópico direto, sem IA
+ *   1. número do menu → tópico direto ou sub-menu, sem IA
  *   2. IA classifica → se confiante, segue o caminho do tópico
  *   3. qualquer dúvida ou falha → menu (história 1.2: "em vez de adivinhar")
  */
@@ -67,6 +75,7 @@ export class Atendimento {
     private readonly conversas: RepositorioDeConversas,
     private readonly mensagens: RepositorioDeMensagens,
     private readonly eventos: RepositorioDeEventos,
+    private readonly contextoMenu: RepositorioDeContextoDoMenu,
     private readonly classificador: ClassificadorDeIntencao | null,
     private readonly menu: Menu,
     private readonly opcoes: OpcoesDeAtendimento
@@ -96,7 +105,9 @@ export class Atendimento {
     // História 1.6: "digitando..." desde o início do processamento, inclusive enquanto a IA pensa.
     await this.canal.indicarDigitando(mensagem.enderecoResposta);
 
-    const decisao = await this.decidir(mensagem.texto);
+    // História 1.1: em que nível do menu o cliente está (vazio = menu principal).
+    const caminhoAnterior = await this.caminhoAtual(conversaId);
+    const decisao = await this.decidir(mensagem.texto, caminhoAnterior);
     const resposta = this.textoDaResposta(decisao);
 
     // Log sem dados pessoais: telefone mascarado e só o começo do texto (ver PrivacidadeDeLog).
@@ -110,6 +121,9 @@ export class Atendimento {
     // próxima entrega desta mesma mensagem é reprocessada (ver registrarEntrada). Custo aceito: se a
     // queda vier DEPOIS do envio, a resposta pode sair repetida; em troca, ninguém fica sem resposta.
     const saidaId = await this.canal.enviarTexto(mensagem.enderecoResposta, resposta);
+    // O nível do menu só é gravado depois do envio: se o envio falhar, a mensagem é reprocessada
+    // a partir do nível ANTERIOR, em vez de navegar duas vezes.
+    await this.guardarCaminho(conversaId, caminhoAnterior, decisao.caminhoMenu);
     await this.mensagens.registrarSaida(conversaId, saidaId, resposta);
     await this.eventos.registrar({
       conversaId,
@@ -123,6 +137,7 @@ export class Atendimento {
         confianca: decisao.confianca,
         latenciaIaMs: decisao.latenciaIaMs,
         classificador: this.classificador?.nome ?? null,
+        caminhoMenu: decisao.caminhoMenu, // nível do menu depois desta resposta
       },
     });
     await this.mensagens.marcarProcessada(entradaId);
@@ -173,18 +188,28 @@ export class Atendimento {
     }
   }
 
-  /** Resposta do tópico; sem tópico, o menu (com aviso quando o cliente digitou um número que não é opção). */
+  /** Texto específico da decisão (sub-menu, folha), senão a resposta do tópico, senão o menu. */
   private textoDaResposta(decisao: Decisao): string {
+    if (decisao.texto !== null) return decisao.texto;
     if (decisao.topico) return decisao.topico.respostaProvisoria;
-    return decisao.origem === "menu_invalido" ? this.menu.textoOpcaoInvalida() : this.menu.texto();
+    return this.menu.texto();
   }
 
-  private async decidir(texto: string): Promise<Decisao> {
-    const leitura = this.menu.interpretar(texto);
-    if (leitura.tipo === "opcao") return { topico: leitura.topico, origem: "menu", confianca: null, latenciaIaMs: null };
-    if (leitura.tipo === "invalida") return { topico: null, origem: "menu_invalido", confianca: null, latenciaIaMs: null };
+  private async decidir(texto: string, caminhoMenu: readonly string[]): Promise<Decisao> {
+    // 1) Número: NUNCA chama a IA. Vale para o nível do menu em que o cliente está.
+    const leitura = this.menu.interpretar(texto, caminhoMenu);
+    if (leitura.tipo === "opcao") {
+      return { ...SEM_IA, topico: leitura.topico, origem: "menu", texto: leitura.texto, caminhoMenu: [] };
+    }
+    if (leitura.tipo === "navegacao") {
+      return { ...SEM_IA, topico: leitura.topico, origem: "menu", texto: leitura.texto, caminhoMenu: leitura.novoCaminho };
+    }
+    if (leitura.tipo === "invalida") {
+      return { ...SEM_IA, topico: null, origem: "menu_invalido", texto: leitura.texto, caminhoMenu: leitura.novoCaminho };
+    }
 
-    if (!this.classificador) return { topico: null, origem: "sem_ia", confianca: null, latenciaIaMs: null };
+    // 2) Texto livre: o cliente sai de qualquer sub-menu (caminhoMenu: []) e segue o fluxo da IA.
+    if (!this.classificador) return { ...SEM_IA, topico: null, origem: "sem_ia", texto: null, caminhoMenu: [] };
 
     const inicio = Date.now();
     try {
@@ -193,13 +218,41 @@ export class Atendimento {
       const encontrado = TOPICOS.find((t) => t.id === topico && t.ativo) ?? null;
 
       if (encontrado && confianca >= this.opcoes.confiancaMinima) {
-        return { topico: encontrado, origem: "ia", confianca, latenciaIaMs };
+        // Tópico com sub-menu: abre o sub-menu em vez de mandar o texto provisório.
+        const submenu = this.menu.abrirTopico(encontrado);
+        return {
+          topico: encontrado,
+          origem: "ia",
+          confianca,
+          latenciaIaMs,
+          texto: submenu?.texto ?? null,
+          caminhoMenu: submenu?.novoCaminho ?? [],
+        };
       }
-      return { topico: null, origem: "ia_incerta", confianca, latenciaIaMs };
+      return { topico: null, origem: "ia_incerta", confianca, latenciaIaMs, texto: null, caminhoMenu: [] };
     } catch (erro) {
       // Degrada para o menu em vez de deixar o cliente sem resposta.
       console.error("[atendimento] classificador falhou, exibindo menu:", erro instanceof Error ? erro.message : erro);
-      return { topico: null, origem: "ia_falhou", confianca: null, latenciaIaMs: Date.now() - inicio };
+      return { topico: null, origem: "ia_falhou", confianca: null, latenciaIaMs: Date.now() - inicio, texto: null, caminhoMenu: [] };
+    }
+  }
+
+  /** Nível atual do menu. Se o banco falhar aqui, o cliente cai no menu principal (nunca fica sem resposta). */
+  private async caminhoAtual(conversaId: number): Promise<string[]> {
+    try {
+      return await this.contextoMenu.obterCaminho(conversaId);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Grava o novo nível só se mudou. Falha aqui não impede a resposta nem a gravação da saída. */
+  private async guardarCaminho(conversaId: number, anterior: readonly string[], novo: readonly string[]): Promise<void> {
+    if (anterior.length === novo.length && anterior.every((id, i) => id === novo[i])) return;
+    try {
+      await this.contextoMenu.salvarCaminho(conversaId, novo);
+    } catch (erro) {
+      console.warn("[atendimento] não consegui salvar o nível do menu:", erro instanceof Error ? erro.message : erro);
     }
   }
 }

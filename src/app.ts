@@ -15,6 +15,7 @@ import { EventoRepositorio } from "./repositorios/EventoRepositorio.js";
 import type { ClassificadorDeIntencao } from "./nucleo/ClassificadorDeIntencao.js";
 import { ClassificadorGemini } from "./ia/ClassificadorGemini.js";
 import { ServidorHttp } from "./http/ServidorHttp.js";
+import { ContextoMenuRepositorio } from "./repositorios/ContextoMenuRepositorio.js";
 
 const UM_MINUTO_MS = 60_000;
 
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
     new ConversaRepositorio(banco.pool),
     new MensagemRepositorio(banco.pool),
     new EventoRepositorio(banco.pool),
+    new ContextoMenuRepositorio(banco.pool),   // <- linha nova
     classificador,
     new Menu(topicosDoMenu()),
     {

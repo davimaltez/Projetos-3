@@ -41,3 +41,9 @@ export interface NovoEvento {
 export interface RepositorioDeEventos {
   registrar(evento: NovoEvento): Promise<void>;
 }
+
+export interface RepositorioDeContextoDoMenu {
+  /** Ids do topo até o nível atual do menu. Vazio se não houver, se expirou ou se o cliente está no principal. */
+  obterCaminho(conversaId: number): Promise<string[]>;
+  salvarCaminho(conversaId: number, caminho: readonly string[]): Promise<void>;
+}
