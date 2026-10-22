@@ -10,3 +10,6 @@ dist/
 # Sessão do WhatsApp conectado — NUNCA suba isso pro Git.
 # Quem tiver esses arquivos consegue mandar mensagens como esse número.
 auth_baileys/
+
+# Documentos de contexto local; não publicar no repositório.
+/local/
