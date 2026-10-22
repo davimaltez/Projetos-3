@@ -69,6 +69,14 @@ export class Ticket {
         return this.resumoBot;
     }
 
+    public getConversa(): Conversa {
+        return this.conversa;
+    }
+
+    public getAtendente(): Atendente | null {
+        return this.atendente;
+    }
+
     public atribuir(a: Atendente): void {
         if (this.status !== StatusTicket.AGUARDANDO) {
             throw new Error(
