@@ -12,10 +12,13 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey });
 
-function obterHistoricoGit(limite = 30): string {
+// Função utilitária para aguardar entre tentativas
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function obterHistoricoGitDetalhado(limite = 25): string {
   try {
     return execSync(
-      `git log -n ${limite} --pretty=format:"Commit: %h | Autor: %an | Data: %ad | Mensagem: %s" --date=short`,
+      `git log -n ${limite} --stat --pretty=format:"---%nCOMMIT: %h%nAUTOR: %an <%ae>%nDATA: %ad%nMENSAGEM: %s%nDETALHES: %b" --date=short`,
       { encoding: 'utf-8' }
     );
   } catch (error) {
@@ -26,47 +29,69 @@ function obterHistoricoGit(limite = 30): string {
 
 async function gerarResumoIA(historicoGit: string): Promise<string> {
   const prompt = `
-Você é um assistente de documentação de projetos de software.
-Abaixo está o histórico recente de commits de um repositório de desenvolvimento de um chatbot.
+Você é um Arquiteto de Software Sênior analisando o progresso de um chatbot (TypeScript, Baileys/WhatsApp, Postgres).
 
-Analise as mensagens, os autores e agrupe as alterações de forma clara e profissional em formato Markdown.
+Sua tarefa é ler o histórico detalhado de commits abaixo e gerar um documento de **Contexto Técnico para IA**. Esse documento será usado como contexto (system prompt ou memória) em futuras conversas com LLMs para continuarem o desenvolvimento do projeto.
 
-Estruture a resposta da seguinte forma:
-1. **Resumo Geral**: Uma breve visão geral do que evoluiu no projeto.
-2. **Atividades por Desenvolvedor**: Tópicos com o nome de cada pessoa e o que ela realizou.
-3. **Principais Destaques/Funcionalidades**: Novas features, correções de bugs ou melhorias de infraestrutura/documentação.
+---
 
-Histórico de Commits:
+### Estrutura Obrigatória do Documento de Saída (Markdown):
+
+1. **🎯 Estado Atual do Sistema (System Context)**
+   - Resumo técnico do estado do projeto até o momento.
+   - Funcionalidades principais ativas e integradas.
+
+2. **🛠️ Módulos e Arquivos Impactados**
+   - Agrupe por área (ex: \`src/bot\`, \`src/database\`, \`src/routes\`, configurações, etc.) indicando o que foi criado, modificado ou refatorado com base nos commits e arquivos afetados.
+
+3. **👤 Histórico Técnico por Desenvolvedor**
+   - Nome do Desenvolvedor
+   - Tarefas implementadas (detalhando aspectos técnicos como endpoints, esquemas de banco, tratamento de erros, eventos do Baileys, etc.)
+
+4. **⚡ Bloco de Contexto Rápido para Prompts (Copy-Paste for LLM)**
+   - Crie um bloco compacto e estruturado resumindo as regras de negócio já implementadas, dependências recentes e dívidas técnicas ou próximos passos implícitos nos commits.
+
+---
+
+Histórico Detalhado do Git:
 ${historicoGit}
 `;
 
-  // Modelo indicado explicitamente pelo retorno da API
-  const candidatos = ['gemini-3.8-flash', 'gemini-2.5-flash'];
+  const modelo = 'gemini-3.8-flash';
+  const maxTentativas = 4;
 
-  for (const modelo of candidatos) {
+  for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
     try {
-      console.log(`🤖 Gerando resumo com o modelo '${modelo}'...`);
+      console.log(`🤖 Gerando contexto com '${modelo}' (Tentativa ${tentativa}/${maxTentativas})...`);
       const response = await ai.models.generateContent({
         model: modelo,
         contents: prompt,
       });
 
       if (response.text) {
-        console.log(`✨ Sucesso usando o modelo '${modelo}'!`);
         return response.text;
       }
     } catch (err: any) {
+      const codigoErro = err?.status || err?.error?.code;
       const mensagemErro = err?.message || JSON.stringify(err);
-      console.error(`❌ Falha no modelo '${modelo}': ${mensagemErro}`);
+
+      // Se for instabilidade de alta demanda (503), aguarda e tenta novamente
+      if (codigoErro === 503 || mensagemErro.includes('high demand') || mensagemErro.includes('UNAVAILABLE')) {
+        console.warn(`⏳ Servidor ocupado (503). Aguardando 3 segundos para tentar novamente...`);
+        await sleep(3000);
+      } else {
+        console.error(`❌ Erro no modelo '${modelo}': ${mensagemErro}`);
+        break; // Erros não-temporários param a execução
+      }
     }
   }
 
-  throw new Error('Não foi possível gerar com os modelos testados.');
+  throw new Error('Serviço temporariamente indisponível após várias tentativas. Tente novamente em alguns instantes.');
 }
 
 async function main() {
-  console.log('🔍 Lendo histórico de commits do Git...');
-  const historico = obterHistoricoGit(30);
+  console.log('🔍 Lendo histórico de commits e arquivos alterados do Git...');
+  const historico = obterHistoricoGitDetalhado(25);
 
   if (!historico) {
     console.log('Nenhum commit encontrado no repositório.');
@@ -75,8 +100,8 @@ async function main() {
 
   try {
     const resumo = await gerarResumoIA(historico);
-    fs.writeFileSync('PROGRESSO.md', `# 🚀 Relatório Automático de Progresso do Projeto\n\n${resumo}`);
-    console.log('\n✅ SUCESSO! O arquivo PROGRESSO.md foi gerado na raiz do projeto!');
+    fs.writeFileSync('CONTEXTO_PROJETO.md', `# 🤖 Contexto Técnico do Projeto para IA\n\n${resumo}`);
+    console.log('\n✅ SUCESSO! O arquivo CONTEXTO_PROJETO.md foi gerado na raiz do projeto!');
   } catch (error: any) {
     console.error('\n💥 Erro final:', error.message);
   }
