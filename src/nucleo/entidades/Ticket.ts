@@ -35,6 +35,44 @@ export class Ticket {
         this.atendente = null;
     }
 
+
+    /** Restaura o registro sem atribuir/fechar novamente nem substituir datas históricas. */
+    public static reconstituir(dados: {
+        protocolo: string;
+        assunto: string;
+        prioridade: Prioridade;
+        status: StatusTicket;
+        dataAbertura: Date;
+        dataFechamento: Date | null;
+        resumoBot: string;
+        conversa: Conversa;
+        atendente: Atendente | null;
+    }): Ticket {
+        const aguardando = dados.status === StatusTicket.AGUARDANDO
+            && dados.atendente === null && dados.dataFechamento === null;
+        const emAtendimento = dados.status === StatusTicket.EM_ATENDIMENTO
+            && dados.atendente !== null && dados.dataFechamento === null;
+        const encerrado = dados.status === StatusTicket.ENCERRADO
+            && dados.atendente !== null && dados.dataFechamento !== null;
+        if (!(aguardando || emAtendimento || encerrado)
+            || !Object.values(Prioridade).includes(dados.prioridade)) {
+            throw new Error("Estado do ticket persistido inconsistente.");
+        }
+        for (const data of [dados.dataAbertura, dados.dataFechamento]) {
+            if (data !== null && !Number.isFinite(data.getTime())) {
+                throw new Error("Data do ticket persistido inválida.");
+            }
+        }
+        const ticket = new Ticket(dados.protocolo, dados.assunto, dados.prioridade,
+            dados.dataAbertura, dados.resumoBot, dados.conversa);
+        ticket.status = dados.status;
+        ticket.dataFechamento = dados.dataFechamento === null
+            ? null : new Date(dados.dataFechamento.getTime());
+        ticket.atendente = dados.atendente;
+        dados.conversa.vincularTicketReconstituido(ticket);
+        return ticket;
+    }
+
     public getProtocolo(): string {
         return this.protocolo;
     }

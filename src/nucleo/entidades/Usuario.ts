@@ -1,12 +1,13 @@
 import type { Remetente } from "./Remetente.js";
 
 /** Identidade comum a clientes e atendentes, conforme o diagrama de classes. */
-export abstract class Usuario implements Remetente {
+// Clientes históricos podem usar string | null; atendentes mantêm o padrão string.
+export abstract class Usuario<Informacao extends string | null = string> implements Remetente {
   readonly #id: number;
-  readonly #nome: string;
-  readonly #email: string;
+  readonly #nome: Informacao;
+  readonly #email: Informacao;
 
-  constructor(id: number, nome: string, email: string) {
+  constructor(id: number, nome: Informacao, email: Informacao) {
     this.#id = id;
     this.#nome = nome;
     this.#email = email;
@@ -16,11 +17,11 @@ export abstract class Usuario implements Remetente {
     return this.#id;
   }
 
-  getNome(): string {
+  getNome(): Informacao {
     return this.#nome;
   }
 
-  getEmail(): string {
+  getEmail(): Informacao {
     return this.#email;
   }
 
