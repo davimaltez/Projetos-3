@@ -3,26 +3,31 @@
 O adaptador recebe o `pg.Pool` existente. Não altera schema, serviço, interface,
 cadastro de operadores ou montagem da aplicação.
 
-## Operações
+## Operações (interface do plano da Dupla 3)
 
-- `listar()`: carrega todos os estados com uma única consulta. O serviço continua
-  filtrando e ordenando por prioridade/abertura. Protocolo fornece ordem estável
-  ao repositório, inclusive para empates na ordenação do serviço.
-- `obterPorId(protocolo)`: usa parâmetro SQL, retorna Ticket ou null. A consulta
+- `listarAguardando()`: só tickets `AGUARDANDO`, filtrados e ordenados **no SQL**
+  por prioridade (`URGENTE`, `ALTA`, `MEDIA`, `BAIXA`), data de abertura e id. A
+  expressão de ordem é a mesma do índice `idx_tickets_fila`. Tickets em
+  atendimento ou encerrados (e seus históricos) não são carregados.
+- `buscarPorId(id)`: usa parâmetro SQL, retorna Ticket ou null. A consulta
   inclui conversa, cliente, responsável e todas as mensagens, mesmo pendentes,
   anteriores à abertura ou pertencentes a tickets encerrados.
-- `atribuirSeAguardando(protocolo, atendente)`: usa um único PoolClient e uma
+- `atribuirAtendente(ticketId, atendenteId)`: usa um único PoolClient e uma
   transação; bloqueia o ticket com FOR UPDATE, verifica o estado no banco, confere
-  a identidade do atendente com FOR SHARE e faz UPDATE condicional. Duas conexões
+  o cadastro do atendente com FOR SHARE e faz UPDATE condicional. Duas conexões
   disputando a mesma linha permitem só um vencedor.
 
-Ticket inexistente/indisponível retorna false, sem consultar/modificar o cadastro.
+Erros (definidos em `src/nucleo/ErrosDaFila.ts`): ticket inexistente gera
+`TicketNaoEncontradoError`; ticket fora de `AGUARDANDO` gera
+`TicketIndisponivelError`; atendente fora da tabela `atendentes` (ou id que não é
+número) gera `AtendenteNaoCadastradoError`. Em todos os casos nada é alterado.
 O método não muda disponibilidade do atendente nem estado da conversa.
+Como o plano passa só o id, a conferência de nome/e-mail do atendente foi
+retirada. Essa verificação não autentica o operador; autenticação permanece na
+camada chamadora.
 
-**Precondição:** o atendente deve estar cadastrado com o mesmo ID, nome e e-mail.
-Ausência gera `AtendenteNaoCadastradoError`; divergência gera
-`IdentidadeAtendenteDivergenteError`. Não há atualização automática do cadastro.
-Essa verificação não autentica o operador; autenticação permanece na camada chamadora.
+Mensagens de saída persistidas têm o bot como remetente (hoje só o bot grava
+saídas). Conversa.dataCriacao vem de `conversas.criado_em`.
 
 Erros de conexão, SQL e integridade são propagados. Após adquirir a conexão,
 falhas tentam ROLLBACK; finally libera o cliente. Se o rollback também falhar,
@@ -40,9 +45,9 @@ Contratos de leitura que passam a admitir null:
 
 | Entidade | Getters |
 |---|---|
-| Conversa | getCanal(), getDataInicio(), getStatus() |
-| Mensagem | getConteudo(), getRemetente(), getIntencaoDetectada() |
-| Cliente | getNome(), getEmail() |
+| Conversa | getCanal(), getStatus() |
+| Mensagem | getIntencaoDetectada() (texto NULL antigo vira "") |
+| Cliente | getEmail() (getNome() sem nome cadastrado devolve o telefone) |
 
 Usuario tem parâmetro genérico com padrão string: Atendente mantém nome/e-mail
 estaticamente completos. Cliente admite a variante histórica string ou null.

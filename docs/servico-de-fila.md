@@ -7,10 +7,11 @@ WhatsApp, Gemini ou variáveis de ambiente.
 ## Operações
 
 - `listarFila(): Promise<Ticket[]>`: retorna somente tickets `AGUARDANDO`, na
-  ordem `ALTA`, `MEDIA`, `BAIXA`. Dentro de cada prioridade, a data de abertura
+  ordem `URGENTE`, `ALTA`, `MEDIA`, `BAIXA`. Dentro de cada prioridade, a data de abertura
   mais antiga vem primeiro. Em empate de prioridade e data, preserva a ordem
   fornecida pelo repositório.
-- `assumirTicket(ticketId, atendente): Promise<void>`: usa o protocolo como ID,
+- `assumirTicket(ticketId, atendente): Promise<void>`: usa o protocolo como ID
+  (`Ticket.getId()`), chama `RepositorioDeFila.atribuirAtendente(ticketId, atendente.getId())`,
   atribui o atendente e muda o ticket para `EM_ATENDIMENTO`. Uma segunda tentativa
   gera `TicketIndisponivelError`, inclusive pelo mesmo atendente. Tickets
   encerrados também são recusados; o responsável anterior é preservado.
@@ -24,12 +25,13 @@ existe. Autenticar o operador é responsabilidade da camada que chama o serviço
 
 ## Armazenamento e concorrência
 
-`RepositorioDeFilaEmMemoria` recebe os tickets iniciais no construtor, guarda-os
-em um array e recusa protocolos duplicados. As listas são copiadas, mas as
+`RepositorioDeFilaEmMemoria` recebe os tickets iniciais e os atendentes cadastrados
+no construtor, guarda-os em arrays e recusa protocolos duplicados.
+`listarAguardando()` filtra e ordena como o repositório PostgreSQL. As listas são copiadas, mas as
 entidades são compartilhadas por referência, como objetos de domínio mutáveis.
 Cada nova instância inicia com os tickets fornecidos; não há persistência em disco.
 
-O contrato exige que `atribuirSeAguardando` verifique o status e faça a atribuição
+O contrato exige que `atribuirAtendente` verifique o status e faça a atribuição
 como uma operação indivisível. Na implementação em memória não há `await` entre
 essas etapas, protegendo chamadas concorrentes ao mesmo repositório no processo.
 Uma futura implementação PostgreSQL deve garantir a condição no próprio banco,
@@ -37,11 +39,11 @@ por exemplo com atualização condicional ou transação com bloqueio.
 
 ## Entidades de apoio
 
-`Usuario` define identidade com ID numérico, nome e e-mail; `Atendente` herda essa
-identidade. `Cliente` e `Chatbot` são contratos mínimos para construir conversas,
-e `Remetente` identifica o autor das mensagens. As funcionalidades adicionais do
-UML, como autenticação, especialidades e comportamento de IA, ficam para suas
-implementações próprias. Os enums estão em `entidades/Enums.ts`.
+`Usuario` (abstrata) define identidade com id em texto, nome e e-mail. `Cliente`,
+`Atendente` e `Chatbot` são classes que implementam `Remetente`
+(`getId()`, `getNome()`, `getTipo()`, `getIdentificacao()`). Os enums estão em
+`entidades/Enums.ts` (`PrioridadeTicket` inclui `URGENTE`; `Prioridade` é o nome
+antigo do mesmo enum). Erros da fila: `ErrosDaFila.ts`; ordem da fila: `OrdemDaFila.ts`.
 
 Esta entrega não conecta a fila ao fluxo de produção: cadastro de tickets no
 armazenamento real, sincronização do estado da conversa, comandos do operador

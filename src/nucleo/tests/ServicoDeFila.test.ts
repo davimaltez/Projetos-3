@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { RepositorioDeFilaEmMemoria } from "../../repositorios/RepositorioDeFilaEmMemoria.js";
 import type { RepositorioDeFila } from "../RepositorioDeFila.js";
+import { AtendenteNaoCadastradoError } from "../ErrosDaFila.js";
 import { ServicoDeFila, TicketIndisponivelError, TicketNaoEncontradoError } from "../ServicoDeFila.js";
 import { Atendente } from "../entidades/Atendente.js";
 import { Chatbot } from "../entidades/Chatbot.js";
@@ -26,8 +27,13 @@ function criarTicket(protocolo: string, prioridade = Prioridade.MEDIA, minuto = 
   return new Ticket(protocolo, "Suporte", prioridade, instante(minuto), "Resumo do bot", conversa);
 }
 
+// Os atendentes do teste estão cadastrados no repositório (atribuirAtendente recebe só o id).
+function criarRepositorio(tickets: readonly Ticket[] = []): RepositorioDeFilaEmMemoria {
+  return new RepositorioDeFilaEmMemoria(tickets, [ana, bruno]);
+}
+
 function criarServico(tickets: readonly Ticket[] = []): ServicoDeFila {
-  return new ServicoDeFila(new RepositorioDeFilaEmMemoria(tickets));
+  return new ServicoDeFila(criarRepositorio(tickets));
 }
 
 describe("ServicoDeFila.listarFila", () => {
@@ -35,15 +41,16 @@ describe("ServicoDeFila.listarFila", () => {
     assert.deepEqual(await criarServico().listarFila(), []);
   });
 
-  test("prioriza ALTA, MEDIA e BAIXA mesmo quando os menos prioritários chegaram antes", async () => {
+  test("prioriza URGENTE, ALTA, MEDIA e BAIXA mesmo quando os menos prioritários chegaram antes", async () => {
     const baixa = criarTicket("baixa", Prioridade.BAIXA, 0);
     const alta = criarTicket("alta", Prioridade.ALTA, 20);
     const media = criarTicket("media", Prioridade.MEDIA, 10);
-    const fila = await criarServico([baixa, alta, media]).listarFila();
-    assert.deepEqual(fila.map((ticket) => ticket.getProtocolo()), ["alta", "media", "baixa"]);
+    const urgente = criarTicket("urgente", Prioridade.URGENTE, 30);
+    const fila = await criarServico([baixa, alta, urgente, media]).listarFila();
+    assert.deepEqual(fila.map((ticket) => ticket.getProtocolo()), ["urgente", "alta", "media", "baixa"]);
   });
 
-  for (const prioridade of [Prioridade.ALTA, Prioridade.MEDIA, Prioridade.BAIXA]) {
+  for (const prioridade of [Prioridade.URGENTE, Prioridade.ALTA, Prioridade.MEDIA, Prioridade.BAIXA]) {
     test(`atende por ordem de chegada dentro da prioridade ${prioridade}`, async () => {
       const antigo = criarTicket("antigo", prioridade, 0);
       const recente = criarTicket("recente", prioridade, 20);
@@ -57,8 +64,8 @@ describe("ServicoDeFila.listarFila", () => {
     const aguardando = criarTicket("aguardando", Prioridade.BAIXA);
     const emAtendimento = criarTicket("em-atendimento", Prioridade.ALTA);
     const encerrado = criarTicket("encerrado", Prioridade.ALTA);
-    emAtendimento.atribuir(ana);
-    encerrado.atribuir(bruno);
+    emAtendimento.atribuirAtendente(ana);
+    encerrado.atribuirAtendente(bruno);
     encerrado.fechar();
 
     assert.deepEqual(await criarServico([emAtendimento, encerrado, aguardando]).listarFila(), [aguardando]);
@@ -68,22 +75,22 @@ describe("ServicoDeFila.listarFila", () => {
   test("ordenar e modificar a lista retornada não altera a lista do repositório", async () => {
     const baixa = criarTicket("baixa", Prioridade.BAIXA);
     const alta = criarTicket("alta", Prioridade.ALTA);
-    const repositorio = new RepositorioDeFilaEmMemoria([baixa, alta]);
+    const repositorio = criarRepositorio([baixa, alta]);
     const fila = await new ServicoDeFila(repositorio).listarFila();
     fila.pop();
-    assert.deepEqual(await repositorio.listar(), [baixa, alta]);
+    assert.deepEqual(await repositorio.listarAguardando(), [alta, baixa]);
   });
 });
 
 describe("ServicoDeFila.assumirTicket", () => {
   test("atribui ao atendente, persiste EM_ATENDIMENTO e retira o ticket da fila", async () => {
     const ticket = criarTicket("pendente");
-    const repositorio = new RepositorioDeFilaEmMemoria([ticket]);
+    const repositorio = criarRepositorio([ticket]);
     const servico = new ServicoDeFila(repositorio);
 
     await servico.assumirTicket("pendente", ana);
 
-    const salvo = await repositorio.obterPorId("pendente");
+    const salvo = await repositorio.buscarPorId("pendente");
     assert.ok(salvo);
     assert.equal(salvo.getStatus(), StatusTicket.EM_ATENDIMENTO);
     assert.equal(salvo.getAtendente(), ana);
@@ -110,7 +117,7 @@ describe("ServicoDeFila.assumirTicket", () => {
 
   test("não reabre um ticket encerrado", async () => {
     const ticket = criarTicket("encerrado");
-    ticket.atribuir(ana);
+    ticket.atribuirAtendente(ana);
     ticket.fechar();
     const dataFechamento = ticket.getDataFechamento();
 
@@ -126,7 +133,7 @@ describe("ServicoDeFila.assumirTicket", () => {
 
   test("duas instâncias disputando o mesmo ticket permitem somente uma atribuição", async () => {
     const ticket = criarTicket("disputado");
-    const repositorio = new RepositorioDeFilaEmMemoria([ticket]);
+    const repositorio = criarRepositorio([ticket]);
     const servicoA = new ServicoDeFila(repositorio);
     const servicoB = new ServicoDeFila(repositorio);
     const atendentes = [ana, bruno];
@@ -147,9 +154,9 @@ describe("ServicoDeFila.assumirTicket", () => {
   test("recusa quando o repositório detecta disputa após uma leitura que ainda mostrava AGUARDANDO", async () => {
     const leituraAnterior = criarTicket("disputado");
     const repositorio: RepositorioDeFila = {
-      listar: async () => [leituraAnterior],
-      obterPorId: async () => leituraAnterior,
-      atribuirSeAguardando: async () => false,
+      listarAguardando: async () => [leituraAnterior],
+      buscarPorId: async () => leituraAnterior,
+      atribuirAtendente: async (id) => { throw new TicketIndisponivelError(id); },
     };
 
     await assert.rejects(new ServicoDeFila(repositorio).assumirTicket("disputado", ana), TicketIndisponivelError);
@@ -176,10 +183,10 @@ describe("ServicoDeFila.obterHistoricoDoTicket", () => {
     const historico = await servico.obterHistoricoDoTicket("historico");
 
     assert.deepEqual(historico, [pergunta, respostaBot, respostaHumana]);
-    assert.equal(historico[0].getConteudo(), "Meu pedido é 123");
+    assert.equal(historico[0].getTexto(), "Meu pedido é 123");
     assert.equal(historico[0].getRemetente(), cliente);
     assert.equal(historico[0].getIntencaoDetectada(), "status_demanda");
-    assert.deepEqual(historico[0].getDataHora(), instante(0));
+    assert.deepEqual(historico[0].getDataEnvio(), instante(0));
     // A consulta não reordena nem remove mensagens da entidade.
     historico.pop();
     assert.deepEqual(conversa.getHistorico(), [respostaHumana, pergunta, respostaBot]);
@@ -193,7 +200,7 @@ describe("ServicoDeFila.obterHistoricoDoTicket", () => {
     const ticket = criarTicket("encerrado");
     const mensagem = new Mensagem("Problema resolvido", instante(0), cliente);
     ticket.getConversa().adicionarMensagem(mensagem);
-    ticket.atribuir(ana);
+    ticket.atribuirAtendente(ana);
     ticket.fechar();
     assert.deepEqual(await criarServico([ticket]).obterHistoricoDoTicket("encerrado"), [mensagem]);
   });
@@ -209,10 +216,11 @@ describe("RepositorioDeFilaEmMemoria", () => {
     const entrada = [ticket];
     const repositorio = new RepositorioDeFilaEmMemoria(entrada);
     entrada.pop();
-    const saida = await repositorio.listar();
+    const saida = await repositorio.listarAguardando();
     saida.pop();
-    assert.equal(await repositorio.obterPorId("armazenado"), ticket);
-    assert.deepEqual(await new RepositorioDeFilaEmMemoria().listar(), []);
+    assert.equal(await repositorio.buscarPorId("armazenado"), ticket);
+    assert.equal((await repositorio.listarAguardando()).length, 1);
+    assert.deepEqual(await new RepositorioDeFilaEmMemoria().listarAguardando(), []);
   });
 
   test("recusa protocolos duplicados para evitar atribuição ambígua", () => {
@@ -224,12 +232,31 @@ describe("RepositorioDeFilaEmMemoria", () => {
 
   test("a atribuição condicional não sobrescreve o atendente nem cria tickets inexistentes", async () => {
     const ticket = criarTicket("pendente");
-    const repositorio = new RepositorioDeFilaEmMemoria([ticket]);
-    assert.equal(await repositorio.atribuirSeAguardando("pendente", ana), true);
-    assert.equal(await repositorio.atribuirSeAguardando("pendente", bruno), false);
+    const repositorio = criarRepositorio([ticket]);
+    await repositorio.atribuirAtendente("pendente", ana.getId());
+    await assert.rejects(repositorio.atribuirAtendente("pendente", bruno.getId()), TicketIndisponivelError);
     assert.equal(ticket.getAtendente(), ana);
-    assert.equal(await repositorio.atribuirSeAguardando("inexistente", bruno), false);
-    assert.equal(await repositorio.obterPorId("inexistente"), null);
-    assert.equal((await repositorio.listar()).length, 1);
+    await assert.rejects(repositorio.atribuirAtendente("inexistente", bruno.getId()), TicketNaoEncontradoError);
+    assert.equal(await repositorio.buscarPorId("inexistente"), null);
+    assert.equal(await repositorio.buscarPorId("pendente"), ticket);
+  });
+
+  test("listarAguardando devolve só AGUARDANDO, por prioridade e chegada", async () => {
+    const urgente = criarTicket("urgente", Prioridade.URGENTE, 20);
+    const antigo = criarTicket("antigo", Prioridade.BAIXA, 0);
+    const ocupado = criarTicket("ocupado", Prioridade.URGENTE, 0);
+    ocupado.atribuirAtendente(ana);
+    assert.deepEqual(
+      (await criarRepositorio([antigo, ocupado, urgente]).listarAguardando()).map((t) => t.getId()),
+      ["urgente", "antigo"],
+    );
+  });
+
+  test("atendente fora do cadastro não é atribuído e o ticket continua AGUARDANDO", async () => {
+    const ticket = criarTicket("pendente");
+    const repositorio = new RepositorioDeFilaEmMemoria([ticket], [ana]);
+    await assert.rejects(repositorio.atribuirAtendente("pendente", bruno.getId()), AtendenteNaoCadastradoError);
+    assert.equal(ticket.getStatus(), StatusTicket.AGUARDANDO);
+    assert.equal(ticket.getAtendente(), null);
   });
 });

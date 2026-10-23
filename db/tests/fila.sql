@@ -34,6 +34,11 @@ BEGIN
   INSERT INTO clientes (telefone) VALUES ('teste-fila-sql') RETURNING id INTO cliente;
   INSERT INTO conversas (cliente_id) VALUES (cliente) RETURNING id INTO conversa;
   INSERT INTO conversas (cliente_id) VALUES (cliente) RETURNING id INTO outra_conversa;
+  IF (SELECT criado_em FROM conversas WHERE id = conversa) IS NULL THEN
+    RAISE EXCEPTION 'conversas.criado_em sem default';
+  END IF;
+  PERFORM pg_temp.esperar_erro(
+    format('UPDATE conversas SET criado_em = NULL WHERE id = %s', conversa), '23502');
 
   -- E-mail repetido é permitido; default OFFLINE e especialidade opcional.
   INSERT INTO atendentes (id, nome, email) VALUES
@@ -66,14 +71,14 @@ BEGIN
           OR (estado = 'EM_ATENDIMENTO' AND tem_atendente AND NOT tem_fechamento)
           OR (estado = 'ENCERRADO' AND tem_atendente AND tem_fechamento);
         comando := format(
-          'INSERT INTO tickets (protocolo, conversa_id, atendente_id, assunto, prioridade,
+          'INSERT INTO tickets (id, conversa_id, atendente_id, assunto, prioridade,
             status, data_abertura, data_fechamento, resumo_bot)
            VALUES (''nao-uuid'', %s, %L, ''Suporte'', ''MEDIA'', %L,
             ''2026-01-01 10:00:00+00'', %L, '''')',
           conversa, responsavel, estado, fechamento);
         IF valido THEN
           EXECUTE comando;
-          DELETE FROM tickets WHERE protocolo = 'nao-uuid';
+          DELETE FROM tickets WHERE id = 'nao-uuid';
         ELSE
           PERFORM pg_temp.esperar_erro(comando, '23514');
         END IF;
@@ -82,44 +87,44 @@ BEGIN
   END LOOP;
 
   -- Dados válidos para testar UPDATEs, PK, UNIQUE e FKs.
-  INSERT INTO tickets (protocolo, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
+  INSERT INTO tickets (id, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
     VALUES ('pendente', conversa, 'Suporte', 'MEDIA', '2026-01-01 10:00:00+00', '');
-  IF (SELECT status FROM tickets WHERE protocolo = 'pendente') <> 'AGUARDANDO' THEN
+  IF (SELECT status FROM tickets WHERE id = 'pendente') <> 'AGUARDANDO' THEN
     RAISE EXCEPTION 'Default do ticket incorreto';
   END IF;
-  FOREACH prioridade IN ARRAY ARRAY['ALTA', 'MEDIA', 'BAIXA'] LOOP
-    EXECUTE 'UPDATE tickets SET prioridade = $1 WHERE protocolo = ''pendente''' USING prioridade;
+  FOREACH prioridade IN ARRAY ARRAY['URGENTE', 'ALTA', 'MEDIA', 'BAIXA'] LOOP
+    EXECUTE 'UPDATE tickets SET prioridade = $1 WHERE id = ''pendente''' USING prioridade;
   END LOOP;
   PERFORM pg_temp.esperar_erro(
-    'UPDATE tickets SET prioridade = ''URGENTE'' WHERE protocolo = ''pendente''', '23514');
+    'UPDATE tickets SET prioridade = ''CRITICA'' WHERE id = ''pendente''', '23514');
   PERFORM pg_temp.esperar_erro(
-    'UPDATE tickets SET status = ''INVALIDO'' WHERE protocolo = ''pendente''', '23514');
+    'UPDATE tickets SET status = ''INVALIDO'' WHERE id = ''pendente''', '23514');
   FOREACH coluna IN ARRAY ARRAY[
-    'protocolo', 'conversa_id', 'assunto', 'prioridade', 'status', 'data_abertura', 'resumo_bot'
+    'id', 'conversa_id', 'assunto', 'prioridade', 'status', 'data_abertura', 'resumo_bot'
   ] LOOP
     PERFORM pg_temp.esperar_erro(
-      format('UPDATE tickets SET %I = NULL WHERE protocolo = ''pendente''', coluna), '23502');
+      format('UPDATE tickets SET %I = NULL WHERE id = ''pendente''', coluna), '23502');
   END LOOP;
   PERFORM pg_temp.esperar_erro(
-    format('INSERT INTO tickets (protocolo, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
+    format('INSERT INTO tickets (id, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
       VALUES (''pendente'', %s, ''Suporte'', ''ALTA'', now(), '''')', outra_conversa), '23505');
   PERFORM pg_temp.esperar_erro(
-    format('INSERT INTO tickets (protocolo, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
+    format('INSERT INTO tickets (id, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
       VALUES (''duplicado'', %s, ''Suporte'', ''ALTA'', now(), '''')', conversa), '23505');
   PERFORM pg_temp.esperar_erro(
-    'UPDATE tickets SET conversa_id = 2147483647 WHERE protocolo = ''pendente''', '23503');
+    'UPDATE tickets SET conversa_id = 2147483647 WHERE id = ''pendente''', '23503');
   PERFORM pg_temp.esperar_erro(
     'UPDATE tickets SET status = ''EM_ATENDIMENTO'', atendente_id = 2147483647
-     WHERE protocolo = ''pendente''', '23503');
-  UPDATE tickets SET status = 'EM_ATENDIMENTO', atendente_id = -9001 WHERE protocolo = 'pendente';
+     WHERE id = ''pendente''', '23503');
+  UPDATE tickets SET status = 'EM_ATENDIMENTO', atendente_id = -9001 WHERE id = 'pendente';
   -- RESTRICT pode emitir foreign_key_violation ou restrict_violation conforme a versão.
   PERFORM pg_temp.esperar_erro('DELETE FROM atendentes WHERE id = -9001', '23503,23001');
   PERFORM pg_temp.esperar_erro(format('DELETE FROM conversas WHERE id = %s', conversa), '23503,23001');
   UPDATE tickets SET status = 'ENCERRADO', data_fechamento = '2026-01-01 11:00:00+00'
-    WHERE protocolo = 'pendente';
+    WHERE id = 'pendente';
   -- Mesmo encerrada, a conversa não pode gerar outro ticket.
   PERFORM pg_temp.esperar_erro(
-    format('INSERT INTO tickets (protocolo, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
+    format('INSERT INTO tickets (id, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
       VALUES (''novo'', %s, ''Suporte'', ''BAIXA'', now(), '''')', conversa), '23505');
 
   -- Caminho de escrita legado continua válido.

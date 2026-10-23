@@ -6,14 +6,12 @@ import { after, afterEach, before, beforeEach, describe, test } from "node:test"
 import { setTimeout as aguardar } from "node:timers/promises";
 import pg from "pg";
 import { Atendente } from "../../nucleo/entidades/Atendente.js";
-import { Prioridade, StatusConversa, StatusTicket } from "../../nucleo/entidades/Enums.js";
+import { Prioridade, StatusConversa, StatusTicket, TipoRemetente } from "../../nucleo/entidades/Enums.js";
 import { Ticket } from "../../nucleo/entidades/Ticket.js";
 import { Mensagem } from "../../nucleo/entidades/Mensagem.js";
 import { Conversa } from "../../nucleo/entidades/Conversa.js";
-import { ServicoDeFila, TicketIndisponivelError } from "../../nucleo/ServicoDeFila.js";
-import {
-  RepositorioDeFilaPg, AtendenteNaoCadastradoError, IdentidadeAtendenteDivergenteError,
-} from "../RepositorioDeFilaPg.js";
+import { ServicoDeFila, TicketIndisponivelError, TicketNaoEncontradoError } from "../../nucleo/ServicoDeFila.js";
+import { RepositorioDeFilaPg, AtendenteNaoCadastradoError } from "../RepositorioDeFilaPg.js";
 
 const habilitado = process.env.FILA_PG_TEST === "1";
 const abertura = new Date("2026-01-01T10:00:00.123Z");
@@ -98,7 +96,7 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
     );
     const id = conversa.rows[0].id;
     await poolA.query(
-      `INSERT INTO tickets (protocolo, conversa_id, assunto, prioridade, status,
+      `INSERT INTO tickets (id, conversa_id, assunto, prioridade, status,
          data_abertura, data_fechamento, resumo_bot, atendente_id)
        VALUES ($1, $2, 'Suporte', $3, $4, $5, $6, 'Resumo persistido', $7)`,
       [protocolo, id, opcoes.prioridade ?? Prioridade.MEDIA, opcoes.status ?? StatusTicket.AGUARDANDO,
@@ -108,10 +106,10 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
   }
 
   test("lista vazia e protocolo inexistente", async () => {
-    assert.deepEqual(await repositorio.listar(), []);
-    assert.equal(await repositorio.obterPorId("ausente"), null);
+    assert.deepEqual(await repositorio.listarAguardando(), []);
+    assert.equal(await repositorio.buscarPorId("ausente"), null);
     assert.deepEqual(await new ServicoDeFila(repositorio).listarFila(), []);
-    assert.equal(await repositorio.atribuirSeAguardando("ausente", ana), false);
+    await assert.rejects(repositorio.atribuirAtendente("ausente", ana.getId()), TicketNaoEncontradoError);
   });
 
   test("reconstitui todos os estados, prioridades e datas sem depender da instância", async () => {
@@ -119,8 +117,13 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
     await criarTicket("aguardando", { prioridade: Prioridade.BAIXA });
     await criarTicket("em-atendimento", { prioridade: Prioridade.ALTA, status: StatusTicket.EM_ATENDIMENTO, atendenteId: ana.getId() });
     await criarTicket("encerrado", { status: StatusTicket.ENCERRADO, atendenteId: ana.getId(), dataFechamento: fechamento });
-    const todos = await repositorio.listar();
-    assert.equal(todos.length, 3);
+    // listarAguardando traz só a fila; os outros estados são lidos por id.
+    assert.deepEqual((await repositorio.listarAguardando()).map(t => t.getId()), ["aguardando"]);
+    const todos = await Promise.all(["aguardando", "em-atendimento", "encerrado"].map(async (id) => {
+      const ticket = await repositorio.buscarPorId(id);
+      assert.ok(ticket);
+      return ticket;
+    }));
     assert.deepEqual(todos.map(t => t.getStatus()).sort(), Object.values(StatusTicket).sort());
     for (const ticket of todos) {
       assert.ok(ticket instanceof Ticket);
@@ -129,40 +132,43 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
       assert.equal(ticket.getAssunto(), "Suporte");
       assert.equal(ticket.getResumoBot(), "Resumo persistido");
     }
-    const encerrado = await new RepositorioDeFilaPg(poolB).obterPorId("encerrado");
+    const encerrado = await new RepositorioDeFilaPg(poolB).buscarPorId("encerrado");
     assert.ok(encerrado);
     assert.equal(encerrado.getStatus(), StatusTicket.ENCERRADO);
     assert.deepEqual(encerrado.getDataFechamento(), fechamento);
     assert.equal(encerrado.getAtendente()?.getEmail(), ana.getEmail());
-    assert.equal((await repositorio.obterPorId("aguardando"))?.getAtendente(), null);
-    assert.equal((await repositorio.obterPorId("em-atendimento"))?.getPrioridade(), Prioridade.ALTA);
+    assert.equal((await repositorio.buscarPorId("aguardando"))?.getAtendente(), null);
+    assert.equal((await repositorio.buscarPorId("em-atendimento"))?.getPrioridade(), Prioridade.ALTA);
   });
 
   test("protocolo é texto parametrizado, inclusive aspas e SQL", async () => {
     const protocolo = "'; SELECT 1; --";
     await criarTicket(protocolo);
-    assert.equal((await repositorio.obterPorId(protocolo))?.getProtocolo(), protocolo);
-    assert.equal(await repositorio.obterPorId("' OR true --"), null);
-    assert.equal((await repositorio.listar()).length, 1);
+    assert.equal((await repositorio.buscarPorId(protocolo))?.getProtocolo(), protocolo);
+    assert.equal(await repositorio.buscarPorId("' OR true --"), null);
+    assert.equal((await repositorio.listarAguardando()).length, 1);
   });
 
   test("dados históricos ausentes e estado desconhecido permanecem explícitos", async () => {
     const id = await criarTicket("legado", { estado: "ESTADO_LEGADO" });
     await poolA.query("INSERT INTO mensagens (conversa_id, direcao, texto) VALUES ($1, 'saida', NULL)", [id]);
-    const ticket = await repositorio.obterPorId("legado");
+    const ticket = await repositorio.buscarPorId("legado");
     assert.ok(ticket);
     const conversa = ticket.getConversa();
-    assert.equal(conversa.getDataInicio(), null);
+    // conversas.criado_em tem default: a data de criação sempre existe.
+    assert.ok(conversa.getDataCriacao() instanceof Date);
     assert.equal(conversa.getDataFim(), null);
     assert.equal(conversa.getCanal(), null);
     assert.equal(conversa.getChatbot(), null);
     assert.equal(conversa.getStatus(), null);
     assert.equal(conversa.getEstadoPersistido(), "ESTADO_LEGADO");
-    assert.equal(conversa.getCliente().getNome(), null);
+    // Cliente sem nome é apresentado pelo telefone (Remetente.getNome(): string).
+    assert.equal(conversa.getCliente().getNome(), conversa.getCliente().getTelefone());
     assert.equal(conversa.getCliente().getEmail(), null);
     const mensagem = conversa.getHistorico()[0];
-    assert.equal(mensagem.getConteudo(), null);
-    assert.equal(mensagem.getRemetente(), null);
+    assert.equal(mensagem.getTexto(), "");
+    assert.equal(mensagem.getRemetente().getTipo(), TipoRemetente.CHATBOT);
+    assert.equal(mensagem.isProcessado(), false);
     assert.equal(mensagem.getIntencaoDetectada(), null);
     assert.equal(mensagem.getDirecao(), "saida");
     assert.equal(conversa.transferirParaHumano(), ticket);
@@ -198,17 +204,19 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
       "INSERT INTO eventos (conversa_id, tipo, intencao, dados, sintetico) VALUES ($1, 'resposta', 'sintetica', $2, true)",
       [conversaId, JSON.stringify({ mensagemId: entrada.rows[0].id })]);
     await poolA.query("INSERT INTO eventos (conversa_id, tipo, dados) VALUES ($1, 'resposta', '{\"mensagemId\":\"invalido\"}')", [conversaId]);
-    const ticket = await repositorio.obterPorId("historico");
+    const ticket = await repositorio.buscarPorId("historico");
     assert.ok(ticket);
     assert.equal(ticket.getConversa().getStatus(), StatusConversa.ENCERRADA);
     const historico = await new ServicoDeFila(repositorio).obterHistoricoDoTicket("historico");
     assert.ok(historico.every(m => m instanceof Mensagem));
-    assert.deepEqual(historico.map(m => m.getId()), [entrada.rows[0].id, empate.rows[0].id, posterior.rows[0].id]);
-    assert.deepEqual(historico.map(m => m.getConteudo()), ["Pergunta", "", "Posterior"]);
-    assert.equal(historico[0].getRemetente()?.getIdentificacao(), ticket.getConversa().getCliente().getIdentificacao());
+    assert.deepEqual(historico.map(m => m.getId()), [entrada, empate, posterior].map(r => String(r.rows[0].id)));
+    assert.deepEqual(historico.map(m => m.getTexto()), ["Pergunta", "", "Posterior"]);
+    assert.equal(historico[0].getRemetente().getIdentificacao(), ticket.getConversa().getCliente().getIdentificacao());
     assert.equal(historico[0].getIntencaoDetectada(), "atual");
     assert.equal(historico[1].getIntencaoDetectada(), null);
-    assert.equal(historico[2].getRemetente(), null); // Não atribui ao responsável atual.
+    // Mensagem de saída é do bot: não é atribuída ao atendente responsável atual.
+    assert.equal(historico[2].getRemetente().getTipo(), TipoRemetente.CHATBOT);
+    assert.deepEqual(historico.map(m => m.isProcessado()), [false, false, true]);
     assert.equal(ticket.getConversa().getCliente().getNome(), "Cliente");
   });
 
@@ -223,15 +231,39 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
     assert.deepEqual((await servico.listarFila()).map(t => t.getProtocolo()), ["alta-antiga", "alta-recente", "media", "baixa"]);
     assert.deepEqual(await servico.obterHistoricoDoTicket("media"), []);
     await servico.assumirTicket("media", ana);
-    assert.equal((await new RepositorioDeFilaPg(poolB).obterPorId("media"))?.getAtendente()?.getId(), ana.getId());
+    assert.equal((await new RepositorioDeFilaPg(poolB).buscarPorId("media"))?.getAtendente()?.getId(), ana.getId());
+  });
+
+  test("listarAguardando filtra e ordena no banco: URGENTE, ALTA, MEDIA, BAIXA e depois chegada", async () => {
+    await cadastrar(ana);
+    await criarTicket("baixa", { prioridade: Prioridade.BAIXA });
+    await criarTicket("urgente-recente", { prioridade: Prioridade.URGENTE, dataAbertura: fechamento });
+    await criarTicket("alta", { prioridade: Prioridade.ALTA });
+    await criarTicket("urgente-antigo", { prioridade: Prioridade.URGENTE });
+    await criarTicket("media", { prioridade: Prioridade.MEDIA });
+    await criarTicket("urgente-ocupado", { prioridade: Prioridade.URGENTE, status: StatusTicket.EM_ATENDIMENTO, atendenteId: ana.getId() });
+    await criarTicket("urgente-fechado", { prioridade: Prioridade.URGENTE, status: StatusTicket.ENCERRADO, atendenteId: ana.getId(), dataFechamento: fechamento });
+    // Direto do repositório (sem o ServicoDeFila reordenar): a ordem vem do SQL.
+    assert.deepEqual((await repositorio.listarAguardando()).map(t => t.getId()),
+      ["urgente-antigo", "urgente-recente", "alta", "media", "baixa"]);
+    assert.equal((await repositorio.buscarPorId("urgente-antigo"))?.getPrioridade(), Prioridade.URGENTE);
+  });
+
+  test("a consulta da fila pode usar o índice idx_tickets_fila", async () => {
+    await poolA.query("SET enable_seqscan = off");
+    const plano = await poolA.query<{ "QUERY PLAN": string }>(
+      `EXPLAIN SELECT id FROM tickets WHERE status = 'AGUARDANDO'
+        ORDER BY (CASE prioridade WHEN 'URGENTE' THEN 0 WHEN 'ALTA' THEN 1 WHEN 'MEDIA' THEN 2 ELSE 3 END), data_abertura, id`);
+    await poolA.query("RESET enable_seqscan");
+    assert.ok(plano.rows.some(l => l["QUERY PLAN"].includes("idx_tickets_fila")));
   });
 
   test("atribui sem substituir o responsável em novas tentativas", async () => {
     await cadastrar(ana); await cadastrar(bruno); await criarTicket("atribuir");
-    assert.equal(await repositorio.atribuirSeAguardando("atribuir", ana), true);
-    assert.equal(await repositorio.atribuirSeAguardando("atribuir", bruno), false);
-    assert.equal(await repositorio.atribuirSeAguardando("atribuir", ana), false);
-    const salvo = await new RepositorioDeFilaPg(poolB).obterPorId("atribuir");
+    await repositorio.atribuirAtendente("atribuir", ana.getId());
+    await assert.rejects(repositorio.atribuirAtendente("atribuir", bruno.getId()), TicketIndisponivelError);
+    await assert.rejects(repositorio.atribuirAtendente("atribuir", ana.getId()), TicketIndisponivelError);
+    const salvo = await new RepositorioDeFilaPg(poolB).buscarPorId("atribuir");
     assert.equal(salvo?.getStatus(), StatusTicket.EM_ATENDIMENTO);
     assert.equal(salvo?.getAtendente()?.getId(), ana.getId());
     assert.deepEqual(salvo?.getDataAbertura(), abertura);
@@ -243,13 +275,13 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
     const pidB = (await poolB.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
     assert.notEqual(pidA, pidB);
     const bloqueio = await controle.connect();
-    let tentativas: Promise<boolean[]> | undefined;
+    let tentativas: Promise<PromiseSettledResult<void>[]> | undefined;
     try {
       await bloqueio.query("BEGIN");
-      await bloqueio.query(`SELECT protocolo FROM "${schema}".tickets WHERE protocolo = 'disputa' FOR UPDATE`);
-      tentativas = Promise.all([
-        repositorio.atribuirSeAguardando("disputa", ana),
-        new RepositorioDeFilaPg(poolB).atribuirSeAguardando("disputa", bruno),
+      await bloqueio.query(`SELECT id FROM "${schema}".tickets WHERE id = 'disputa' FOR UPDATE`);
+      tentativas = Promise.allSettled([
+        repositorio.atribuirAtendente("disputa", ana.getId()),
+        new RepositorioDeFilaPg(poolB).atribuirAtendente("disputa", bruno.getId()),
       ]);
       // Evita rejeição não observada caso uma falha aconteça enquanto esperamos a barreira.
       void tentativas.catch(() => undefined);
@@ -271,11 +303,12 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
     }
     assert.ok(tentativas);
     const resultados = await tentativas;
-    assert.equal(resultados.filter(Boolean).length, 1);
-    const vencedor = resultados[0] ? ana : bruno;
-    const perdedor = resultados[0] ? bruno : ana;
-    assert.equal(await repositorio.atribuirSeAguardando("disputa", perdedor), false);
-    assert.equal((await repositorio.obterPorId("disputa"))?.getAtendente()?.getId(), vencedor.getId());
+    assert.equal(resultados.filter(r => r.status === "fulfilled").length, 1);
+    assert.ok(resultados.some(r => r.status === "rejected" && r.reason instanceof TicketIndisponivelError));
+    const vencedor = resultados[0].status === "fulfilled" ? ana : bruno;
+    const perdedor = resultados[0].status === "fulfilled" ? bruno : ana;
+    await assert.rejects(repositorio.atribuirAtendente("disputa", perdedor.getId()), TicketIndisponivelError);
+    assert.equal((await repositorio.buscarPorId("disputa"))?.getAtendente()?.getId(), vencedor.getId());
 
     await criarTicket("disputa-servico");
     const respostas = await Promise.allSettled([
@@ -289,26 +322,24 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
   test("ticket encerrado mantém responsável e fechamento", async () => {
     await cadastrar(ana); await cadastrar(bruno);
     await criarTicket("fechado", { status: StatusTicket.ENCERRADO, atendenteId: ana.getId(), dataFechamento: fechamento });
-    assert.equal(await repositorio.atribuirSeAguardando("fechado", bruno), false);
-    const salvo = await repositorio.obterPorId("fechado");
+    await assert.rejects(repositorio.atribuirAtendente("fechado", bruno.getId()), TicketIndisponivelError);
+    const salvo = await repositorio.buscarPorId("fechado");
     assert.equal(salvo?.getAtendente()?.getId(), ana.getId());
     assert.deepEqual(salvo?.getDataFechamento(), fechamento);
   });
 
-  test("cadastro ausente ou divergente causa erro e rollback sem alterar a identidade", async () => {
+  test("cadastro ausente ou id inválido causa erro e rollback sem alterar o ticket", async () => {
     await criarTicket("cadastro");
-    await assert.rejects(repositorio.atribuirSeAguardando("cadastro", ana), AtendenteNaoCadastradoError);
+    await assert.rejects(repositorio.atribuirAtendente("cadastro", ana.getId()), AtendenteNaoCadastradoError);
     assert.equal((await poolA.query("SELECT * FROM atendentes")).rowCount, 0);
     await cadastrar(ana);
-    await assert.rejects(
-      repositorio.atribuirSeAguardando("cadastro", new Atendente(ana.getId(), "Outro", ana.getEmail())),
-      IdentidadeAtendenteDivergenteError);
-    await assert.rejects(
-      repositorio.atribuirSeAguardando("cadastro", new Atendente(ana.getId(), ana.getNome(), "outro@example.test")),
-      IdentidadeAtendenteDivergenteError);
-    assert.equal((await repositorio.obterPorId("cadastro"))?.getStatus(), StatusTicket.AGUARDANDO);
+    // atendentes.id é inteiro: um id que não é número é "não cadastrado", não erro de conversão.
+    for (const invalido of ["abc", "", "1.5", "99999999999"]) {
+      await assert.rejects(repositorio.atribuirAtendente("cadastro", invalido), AtendenteNaoCadastradoError);
+    }
+    assert.equal((await repositorio.buscarPorId("cadastro"))?.getStatus(), StatusTicket.AGUARDANDO);
     assert.equal((await poolA.query<{ nome: string }>("SELECT nome FROM atendentes")).rows[0].nome, ana.getNome());
-    assert.equal(await repositorio.atribuirSeAguardando("cadastro", ana), true);
+    await repositorio.atribuirAtendente("cadastro", ana.getId());
     assert.equal(poolA.idleCount, poolA.totalCount);
   });
 
@@ -321,13 +352,13 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
       CREATE TRIGGER falha_teste AFTER UPDATE ON tickets
         FOR EACH ROW EXECUTE FUNCTION falhar_atribuicao();
     `);
-    await assert.rejects(repositorio.atribuirSeAguardando("rollback", ana), temCodigo("23514"));
-    const salvo = await new RepositorioDeFilaPg(poolB).obterPorId("rollback");
+    await assert.rejects(repositorio.atribuirAtendente("rollback", ana.getId()), temCodigo("23514"));
+    const salvo = await new RepositorioDeFilaPg(poolB).buscarPorId("rollback");
     assert.equal(salvo?.getStatus(), StatusTicket.AGUARDANDO);
     assert.equal(salvo?.getAtendente(), null);
     assert.equal(poolA.idleCount, poolA.totalCount);
     await poolA.query("DROP TRIGGER falha_teste ON tickets");
-    assert.equal(await repositorio.atribuirSeAguardando("rollback", ana), true);
+    await repositorio.atribuirAtendente("rollback", ana.getId());
   });
 
   test("conexão encerrada durante a transação descarta cliente e preserva rollback no servidor", async () => {
@@ -371,7 +402,7 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
       // allSettled mantém os listeners até ambas as operações terminarem, mesmo em falha.
       const resultados = await Promise.allSettled([
         assert.rejects(
-          repositorio.atribuirSeAguardando("conexao-interrompida", ana), temCodigo("57P01")),
+          repositorio.atribuirAtendente("conexao-interrompida", ana.getId()), temCodigo("57P01")),
         encerramento,
       ]);
       for (const resultado of resultados) {
@@ -392,20 +423,20 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
       poolA.removeListener("error", observarPool);
     }
     assert.equal(poolA.totalCount, 0);
-    const salvo = await new RepositorioDeFilaPg(poolB).obterPorId("conexao-interrompida");
+    const salvo = await new RepositorioDeFilaPg(poolB).buscarPorId("conexao-interrompida");
     assert.equal(salvo?.getStatus(), StatusTicket.AGUARDANDO);
     assert.equal(salvo?.getAtendente(), null);
     await poolB.query("DROP TRIGGER interrupcao_teste ON tickets");
-    assert.equal(await repositorio.atribuirSeAguardando("conexao-interrompida", ana), true);
+    await repositorio.atribuirAtendente("conexao-interrompida", ana.getId());
   });
 
-  test("erros SQL em consultas e atribuição não viram lista vazia, null ou false", async () => {
+  test("erros SQL em consultas e atribuição não viram lista vazia ou null", async () => {
     const poolInvalido = new pg.Pool({ ...conexao, options: "-c search_path=pg_catalog" });
     try {
       const invalido = new RepositorioDeFilaPg(poolInvalido);
-      await assert.rejects(invalido.listar(), temCodigo("42P01"));
-      await assert.rejects(invalido.obterPorId("x"), temCodigo("42P01"));
-      await assert.rejects(invalido.atribuirSeAguardando("x", ana), temCodigo("42P01"));
+      await assert.rejects(invalido.listarAguardando(), temCodigo("42P01"));
+      await assert.rejects(invalido.buscarPorId("x"), temCodigo("42P01"));
+      await assert.rejects(invalido.atribuirAtendente("x", ana.getId()), temCodigo("42P01"));
       assert.equal(poolInvalido.idleCount, poolInvalido.totalCount);
     } finally { await poolInvalido.end(); }
   });
@@ -418,7 +449,7 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
     await new Promise<void>((resolve, reject) => servidor.close(e => e ? reject(e) : resolve()));
     const indisponivel = new pg.Pool({ ...conexao, host: "127.0.0.1", port: endereco.port, connectionTimeoutMillis: 1000 });
     try {
-      await assert.rejects(new RepositorioDeFilaPg(indisponivel).atribuirSeAguardando("x", ana));
+      await assert.rejects(new RepositorioDeFilaPg(indisponivel).atribuirAtendente("x", ana.getId()));
       assert.equal(indisponivel.totalCount, 0);
     } finally { await indisponivel.end(); }
   });

@@ -1,20 +1,28 @@
-import type { Atendente } from "./entidades/Atendente.js";
 import type { Ticket } from "./entidades/Ticket.js";
 
-/** Persistência necessária à fila, independente de banco ou canal de atendimento. */
+/**
+ * Persistência da fila (plano da Dupla 3), independente de banco ou canal de atendimento.
+ * Erros possíveis: ver ErrosDaFila.ts.
+ */
 export interface RepositorioDeFila {
-  /** Retorna uma lista própria; filtrar e ordenar a fila é responsabilidade do serviço. */
-  listar(): Promise<Ticket[]>;
+  /**
+   * Somente tickets AGUARDANDO, ordenados por prioridade (URGENTE, ALTA, MEDIA, BAIXA) e,
+   * dentro dela, pela data de abertura (quem espera há mais tempo primeiro).
+   * Cada ticket vem com a conversa e o histórico completo. Devolve uma lista própria.
+   */
+  listarAguardando(): Promise<Ticket[]>;
 
-  /** O identificador do ticket é seu protocolo. Inclui a conversa e seu histórico completo. */
-  obterPorId(ticketId: string): Promise<Ticket | null>;
+  /** O id do ticket é o protocolo. Inclui a conversa e seu histórico completo; null se não existir. */
+  buscarPorId(id: string): Promise<Ticket | null>;
 
   /**
    * Verifica o status e atribui como uma única operação indivisível, inclusive entre
-   * instâncias do serviço. Retorna false se não existir ou não estiver AGUARDANDO.
-   * Nesse caso, não altera o ticket nem seu responsável.
+   * instâncias do serviço: o ticket passa a EM_ATENDIMENTO com esse atendente.
+   * - TicketNaoEncontradoError: o ticket não existe;
+   * - TicketIndisponivelError: o ticket não está mais AGUARDANDO (nada é alterado);
+   * - AtendenteNaoCadastradoError: o atendente não existe no cadastro (nada é alterado).
    * Uma implementação SQL deve garantir isso no banco (transação ou atualização
    * condicional); uma leitura seguida de gravação sem proteção não é suficiente.
    */
-  atribuirSeAguardando(ticketId: string, atendente: Atendente): Promise<boolean>;
+  atribuirAtendente(ticketId: string, atendenteId: string): Promise<void>;
 }
