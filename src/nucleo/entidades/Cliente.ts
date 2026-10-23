@@ -1,4 +1,4 @@
 import type { Usuario } from "./Usuario.js";
 
-/** Contrato mínimo para a associação de Conversa; a implementação deve estender Usuario. */
-export interface Cliente extends Usuario {}
+/** Cliente histórico preserva a identidade mesmo sem nome/e-mail cadastrados. */
+export interface Cliente extends Usuario<string | null> {}
