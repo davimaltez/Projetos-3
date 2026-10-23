@@ -7,11 +7,8 @@ import type { TipoRemetente } from "./Enums.js";
 export interface Remetente {
   /** Id como texto (plano da Dupla 1). Clientes e atendentes vêm de tabelas diferentes: o id sozinho pode repetir. */
   getId(): string;
-  /**
-   * null só para clientes antigos cadastrados sem nome (a coluna clientes.nome aceita NULL).
-   * Atendente e Chatbot sempre têm nome.
-   */
-  getNome(): string | null;
+  /** Nome para exibir. Cliente antigo cadastrado sem nome mostra o telefone. */
+  getNome(): string;
   getTipo(): TipoRemetente;
   /** Identificação única entre todos os remetentes: "<tipo>:<id>" (ex.: "cliente:5"). */
   getIdentificacao(): string;

@@ -34,6 +34,14 @@ export class Cliente extends Usuario<string | null> implements Remetente {
     this.#autenticado = false;
   }
 
+  /**
+   * Remetente.getNome() é sempre texto (plano). A coluna clientes.nome aceita NULL para
+   * clientes antigos: nesse caso o cliente é apresentado pelo telefone.
+   */
+  override getNome(): string {
+    return super.getNome() ?? this.#telefone;
+  }
+
   getTelefone(): string {
     return this.#telefone;
   }
@@ -69,7 +77,7 @@ export class Cliente extends Usuario<string | null> implements Remetente {
    * Recebe id, canal e chatbot porque o construtor da Conversa exige esses dados
    * (o diagrama mostra a operação sem parâmetros).
    */
-  iniciarConversa(id: number, canal: string, chatbot: Chatbot): Conversa {
+  iniciarConversa(id: number | string, canal: string, chatbot: Chatbot): Conversa {
     if (!this.#autenticado) {
       throw new Error("O cliente precisa estar autenticado para iniciar uma conversa.");
     }

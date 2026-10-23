@@ -17,7 +17,7 @@ const fechamento = new Date("2026-01-01T11:00:00Z");
 
 function conversaHistorica(status: StatusConversa | null = null): Conversa {
   return Conversa.reconstituir({
-    id: 1, canal: null, cliente, chatbot: null, dataInicio: null, dataFim: null,
+    id: 1, canal: null, cliente, chatbot: null, dataCriacao: abertura, dataFim: null,
     status, estadoPersistido: status ?? "LEGADO", mensagens: [],
   });
 }
@@ -25,22 +25,26 @@ function conversaHistorica(status: StatusConversa | null = null): Conversa {
 test("reconstituição representa ausências sem criar identidades ou datas", () => {
   const conversa = conversaHistorica();
   assert.equal(conversa.getCanal(), null);
-  assert.equal(conversa.getDataInicio(), null);
+  // dataCriacao é obrigatória no plano: vem de conversas.criado_em.
+  assert.deepEqual(conversa.getDataCriacao(), abertura);
   assert.equal(conversa.getDataFim(), null);
   assert.equal(conversa.getStatus(), null);
   assert.equal(conversa.getEstadoPersistido(), "LEGADO");
   assert.equal(conversa.getChatbot(), null);
-  assert.equal(conversa.getCliente().getNome(), null);
+  // Cliente antigo sem nome é apresentado pelo telefone (Remetente.getNome(): string).
+  assert.equal(conversa.getCliente().getNome(), "5581999990017");
   assert.equal(conversa.getCliente().getEmail(), null);
   assert.equal(conversa.getCliente().getIdentificacao(), "cliente:17");
   const mensagem = Mensagem.reconstituir({
-    id: 31, direcao: "saida", conteudo: null, dataHora: abertura,
-    remetente: null, intencaoDetectada: null,
+    id: 31, direcao: "saida", texto: null, dataEnvio: abertura,
+    remetente: bot, processado: true, intencaoDetectada: null,
   });
-  assert.equal(mensagem.getConteudo(), null);
-  assert.equal(mensagem.getRemetente(), null);
+  // texto: string no plano; NULL antigo vira "".
+  assert.equal(mensagem.getTexto(), "");
+  assert.equal(mensagem.getRemetente(), bot);
+  assert.equal(mensagem.isProcessado(), true);
   assert.equal(mensagem.getIntencaoDetectada(), null);
-  assert.equal(mensagem.getId(), 31);
+  assert.equal(mensagem.getId(), "31");
   assert.equal(mensagem.getDirecao(), "saida");
 });
 
@@ -49,14 +53,16 @@ test("construtores e transições normais preservam o comportamento anterior", (
   const mensagem = new Mensagem("Olá", abertura, cliente);
   assert.equal(conversa.getStatus(), StatusConversa.COM_BOT);
   assert.equal(conversa.getChatbot(), bot);
-  assert.deepEqual(conversa.getDataInicio(), abertura);
-  assert.equal(mensagem.getIntencaoDetectada(), "");
+  assert.deepEqual(conversa.getDataCriacao(), abertura);
+  // "Sem intenção" agora é sempre null (antes: "" na criação e null na reconstituição).
+  assert.equal(mensagem.getIntencaoDetectada(), null);
+  assert.equal(mensagem.isProcessado(), false);
   conversa.adicionarMensagem(mensagem);
   const ticket = conversa.transferirParaHumano();
   assert.equal(ticket.getResumoBot(), "Olá");
   assert.equal(conversa.transferirParaHumano(), ticket);
   assert.equal(conversa.getStatus(), StatusConversa.AGUARDANDO_ATENDENTE);
-  ticket.atribuir(atendente);
+  ticket.atribuirAtendente(atendente);
   ticket.fechar();
   assert.equal(ticket.getStatus(), StatusTicket.ENCERRADO);
   assert.ok(ticket.getDataFechamento() instanceof Date);
@@ -72,11 +78,11 @@ test("fábrica restaura ticket encerrado e conversa encerrada sem executar trans
   const dataFim = new Date(fechamento);
   const mensagens = [new Mensagem("Resolvido", abertura, cliente)];
   const conversa = Conversa.reconstituir({
-    id: 1, canal: null, cliente, chatbot: null, dataInicio: abertura, dataFim,
+    id: 1, canal: null, cliente, chatbot: null, dataCriacao: abertura, dataFim,
     status: StatusConversa.ENCERRADA, estadoPersistido: "ENCERRADA", mensagens,
   });
   const ticket = Ticket.reconstituir({
-    protocolo: "historico", assunto: "Suporte", prioridade: Prioridade.ALTA,
+    id: "historico", assunto: "Suporte", prioridade: Prioridade.ALTA,
     status: StatusTicket.ENCERRADO, dataAbertura: abertura, dataFechamento: dataFim,
     resumoBot: "Resumo", conversa, atendente,
   });
@@ -90,13 +96,13 @@ test("fábrica restaura ticket encerrado e conversa encerrada sem executar trans
   conversa.getHistorico().pop();
   assert.deepEqual(ticket.getDataFechamento(), fechamento);
   assert.equal(conversa.getHistorico().length, 1);
-  assert.throws(() => ticket.atribuir(atendente));
+  assert.throws(() => ticket.atribuirAtendente(atendente));
 });
 
 test("vínculo reconstituído evita gerar outro protocolo sem alterar o estado legado", () => {
   const conversa = conversaHistorica(StatusConversa.COM_BOT);
   const ticket = Ticket.reconstituir({
-    protocolo: "existente", assunto: "Suporte", prioridade: Prioridade.MEDIA,
+    id: "existente", assunto: "Suporte", prioridade: Prioridade.MEDIA,
     status: StatusTicket.AGUARDANDO, dataAbertura: abertura, dataFechamento: null,
     resumoBot: "", conversa, atendente: null,
   });
@@ -107,24 +113,24 @@ test("vínculo reconstituído evita gerar outro protocolo sem alterar o estado l
 
 test("fábricas recusam estado inconsistente e datas inválidas", () => {
   assert.throws(() => Ticket.reconstituir({
-    protocolo: "incorreto", assunto: "", prioridade: Prioridade.MEDIA,
+    id: "incorreto", assunto: "", prioridade: Prioridade.MEDIA,
     status: StatusTicket.ENCERRADO, dataAbertura: abertura, dataFechamento: null,
     resumoBot: "", conversa: conversaHistorica(), atendente,
   }), /inconsistente/);
   assert.throws(() => Mensagem.reconstituir({
-    id: 1, direcao: "entrada", conteudo: "", dataHora: new Date(NaN),
-    remetente: cliente, intencaoDetectada: null,
+    id: 1, direcao: "entrada", texto: "", dataEnvio: new Date(NaN),
+    remetente: cliente, processado: false, intencaoDetectada: null,
   }), /inválida/);
 });
 
 test("datas e arrays reconstituídos são protegidos por cópias", () => {
   const data = new Date(abertura);
   const mensagem = Mensagem.reconstituir({
-    id: 1, direcao: "entrada", conteudo: "", dataHora: data, remetente: cliente, intencaoDetectada: "",
+    id: 1, direcao: "entrada", texto: "", dataEnvio: data, remetente: cliente, processado: false, intencaoDetectada: "",
   });
   data.setFullYear(2000);
-  mensagem.getDataHora().setFullYear(1999);
-  assert.deepEqual(mensagem.getDataHora(), abertura);
-  assert.equal(mensagem.getConteudo(), "");
+  mensagem.getDataEnvio().setFullYear(1999);
+  assert.deepEqual(mensagem.getDataEnvio(), abertura);
+  assert.equal(mensagem.getTexto(), "");
   assert.equal(mensagem.getIntencaoDetectada(), "");
 });

@@ -99,9 +99,9 @@ describe("Remetente", () => {
     assert.equal(new Atendente(101, "Ana", "ana@example.test").getId(), new Atendente("101", "Ana", "ana@example.test").getId());
   });
 
-  test("cliente antigo sem nome é um remetente com nome null", () => {
+  test("cliente antigo sem nome é apresentado pelo telefone (getNome(): string)", () => {
     const remetente: Remetente = new Cliente(8, null, null, "5581999990008");
-    assert.equal(remetente.getNome(), null);
+    assert.equal(remetente.getNome(), "5581999990008");
     assert.equal(remetente.getTipo(), TipoRemetente.CLIENTE);
   });
 
@@ -145,7 +145,7 @@ describe("Usuario (via Cliente e Atendente)", () => {
 
   test("cliente histórico aceita nome e e-mail nulos", () => {
     const cliente = new Cliente(3, null, null, "5581999990003");
-    assert.equal(cliente.getNome(), null);
+    assert.equal(cliente.getNome(), "5581999990003");
     assert.equal(cliente.getEmail(), null);
     cliente.setNome("Carla");
     assert.equal(cliente.getNome(), "Carla");
@@ -264,7 +264,7 @@ describe("Cliente", () => {
     const bot = novoBot();
     cliente.autenticar();
     const conversa = cliente.iniciarConversa(10, "whatsapp", bot);
-    assert.equal(conversa.getId(), 10);
+    assert.equal(conversa.getId(), "10");
     assert.equal(conversa.getCanal(), "whatsapp");
     assert.equal(conversa.getCliente(), cliente);
     assert.equal(conversa.getChatbot(), bot);
@@ -308,20 +308,20 @@ describe("Chatbot", () => {
     const bot = novoBot();
     const resposta = bot.responder(doCliente(novoCliente(), "status_demanda"));
     const topico = TOPICOS.find((t) => t.id === "status_demanda");
-    assert.equal(resposta.getConteudo(), topico?.respostaProvisoria);
+    assert.equal(resposta.getTexto(), topico?.respostaProvisoria);
     assert.equal(resposta.getRemetente(), bot);
     assert.equal(resposta.getIntencaoDetectada(), "status_demanda");
   });
 
   test("responder sem tópico reconhecido oferece o menu e o atendente", () => {
     const resposta = novoBot().responder(doCliente(novoCliente()));
-    assert.equal(resposta.getConteudo(), RESPOSTA_SEM_TOPICO);
+    assert.equal(resposta.getTexto(), RESPOSTA_SEM_TOPICO);
     assert.equal(resposta.getIntencaoDetectada(), INTENCAO_INDEFINIDA);
   });
 
   test("responder não entrega ao cliente a resposta de tópico só de administrador", () => {
     const resposta = novoBot().responder(doCliente(novoCliente(), "relatorio_admin"));
-    assert.equal(resposta.getConteudo(), RESPOSTA_SEM_TOPICO);
+    assert.equal(resposta.getTexto(), RESPOSTA_SEM_TOPICO);
   });
 
   describe("deveTransferir", () => {
@@ -375,5 +375,57 @@ describe("Chatbot", () => {
       assert.equal(conversa.getStatus(), StatusConversa.AGUARDANDO_ATENDENTE);
       assert.equal(bot.deveTransferir(conversa), false);
     });
+  });
+});
+
+describe("Plano da Dupla 2: Mensagem, Conversa e Ticket", () => {
+  test("Mensagem: id texto gerado, texto, dataEnvio, remetente e processado", () => {
+    const cliente = novoCliente();
+    const a = new Mensagem("Oi", agora, cliente);
+    const b = new Mensagem("Oi", agora, cliente);
+    assert.equal(typeof a.getId(), "string");
+    assert.notEqual(a.getId(), b.getId());
+    assert.equal(a.getTexto(), "Oi");
+    assert.deepEqual(a.getDataEnvio(), agora);
+    assert.equal(a.getRemetente(), cliente);
+    assert.equal(a.isProcessado(), false);
+    a.setProcessado(true);
+    assert.equal(a.isProcessado(), true);
+    assert.equal(a.getIntencaoDetectada(), null);
+  });
+
+  test("Mensagem: sem setter para id e dataEnvio, e dataEnvio é protegida por cópia", () => {
+    const mensagem = new Mensagem("Oi", agora, novoCliente());
+    assert.equal("setId" in mensagem, false);
+    assert.equal("setDataEnvio" in mensagem, false);
+    mensagem.getDataEnvio().setFullYear(1999);
+    assert.deepEqual(mensagem.getDataEnvio(), agora);
+  });
+
+  test("Mensagem: data de envio inválida é recusada", () => {
+    assert.throws(() => new Mensagem("Oi", new Date(Number.NaN), novoCliente()), /inválida/);
+  });
+
+  test("Conversa: id texto, cliente, dataCriacao, adicionarMensagem e getHistorico", () => {
+    const cliente = novoCliente();
+    const conversa = new Conversa(42, "whatsapp", cliente, novoBot(), agora);
+    const mensagem = new Mensagem("Oi", agora, cliente);
+    conversa.adicionarMensagem(mensagem);
+    assert.equal(conversa.getId(), "42");
+    assert.equal(conversa.getCliente(), cliente);
+    assert.deepEqual(conversa.getDataCriacao(), agora);
+    assert.deepEqual(conversa.getHistorico(), [mensagem]);
+  });
+
+  test("Ticket: id texto, getStatus, getPrioridade e atribuirAtendente → EM_ATENDIMENTO", () => {
+    const ticket = novoTicket();
+    const atendente = new Atendente(2, "Ana", "ana@example.test");
+    assert.equal(ticket.getId(), "P-1");
+    assert.equal(ticket.getProtocolo(), ticket.getId());
+    assert.equal(ticket.getPrioridade(), PrioridadeTicket.MEDIA);
+    assert.equal(ticket.getStatus(), StatusTicket.AGUARDANDO);
+    ticket.atribuirAtendente(atendente);
+    assert.equal(ticket.getStatus(), StatusTicket.EM_ATENDIMENTO);
+    assert.equal(ticket.getAtendente(), atendente);
   });
 });

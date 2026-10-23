@@ -1,28 +1,29 @@
 import type { Pool } from "pg";
+import { AtendenteNaoCadastradoError, TicketIndisponivelError, TicketNaoEncontradoError } from "../nucleo/ErrosDaFila.js";
 import type { RepositorioDeFila } from "../nucleo/RepositorioDeFila.js";
 import { Atendente } from "../nucleo/entidades/Atendente.js";
+import { Chatbot } from "../nucleo/entidades/Chatbot.js";
 import { Cliente } from "../nucleo/entidades/Cliente.js";
 import { Conversa } from "../nucleo/entidades/Conversa.js";
 import { Prioridade, StatusAtendente, StatusConversa, StatusTicket } from "../nucleo/entidades/Enums.js";
 import { Mensagem } from "../nucleo/entidades/Mensagem.js";
 import { Ticket } from "../nucleo/entidades/Ticket.js";
 
-export class AtendenteNaoCadastradoError extends Error {
-  constructor(id: number | string) {
-    super(`Atendente ${id} não cadastrado. Cadastre a identidade antes da atribuição.`);
-    this.name = "AtendenteNaoCadastradoError";
-  }
-}
+// Mantém o import antigo (`from "./RepositorioDeFilaPg.js"`) funcionando.
+export { AtendenteNaoCadastradoError } from "../nucleo/ErrosDaFila.js";
 
-export class IdentidadeAtendenteDivergenteError extends Error {
-  constructor(id: number | string) {
-    super(`A identidade recebida para o atendente ${id} diverge do cadastro.`);
-    this.name = "IdentidadeAtendenteDivergenteError";
-  }
-}
+/**
+ * Hoje só o bot grava mensagens de saída (o atendente ainda não responde pelo sistema),
+ * então toda mensagem 'saida' persistida tem o bot como remetente.
+ */
+const CHATBOT_DAS_MENSAGENS = new Chatbot("wxn", "Assistente WXN", "simples e cordial", 2, true);
+
+/** Mesma expressão do índice idx_tickets_fila (db/schema.sql): URGENTE, ALTA, MEDIA, BAIXA. */
+const ORDEM_SQL_DA_PRIORIDADE =
+  "(CASE t.prioridade WHEN 'URGENTE' THEN 0 WHEN 'ALTA' THEN 1 WHEN 'MEDIA' THEN 2 ELSE 3 END)";
 
 interface LinhaTicket {
-  protocolo: string;
+  id: string;
   assunto: string;
   prioridade: string;
   status: string;
@@ -30,6 +31,7 @@ interface LinhaTicket {
   data_fechamento: Date | null;
   resumo_bot: string;
   conversa_id: number;
+  conversa_criada_em: Date;
   estado_conversa: string;
   cliente_id: number;
   cliente_nome: string | null;
@@ -43,19 +45,21 @@ interface LinhaTicket {
   mensagem_texto: string | null;
   mensagem_data: Date | null;
   mensagem_direcao: string | null;
+  mensagem_processado: boolean | null;
   mensagem_intencao: string | null;
 }
 
 // Uma consulta fornece um retrato consistente, sem uma ida ao banco por ticket/mensagem.
 // O LATERAL seleciona a classificação mais recente da entrada, sem multiplicar o histórico.
 const CONSULTA = `
-  SELECT t.protocolo, t.assunto, t.prioridade, t.status,
+  SELECT t.id, t.assunto, t.prioridade, t.status,
          t.data_abertura, t.data_fechamento, t.resumo_bot, t.conversa_id,
-         c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome, cl.telefone AS cliente_telefone,
+         c.criado_em AS conversa_criada_em, c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome, cl.telefone AS cliente_telefone,
          t.atendente_id, a.nome AS atendente_nome, a.email AS atendente_email,
          a.status AS atendente_status, a.especialidade AS atendente_especialidade,
          m.id AS mensagem_id, m.texto AS mensagem_texto, m.criado_em AS mensagem_data,
-         m.direcao AS mensagem_direcao, classificacao.intencao AS mensagem_intencao
+         m.direcao AS mensagem_direcao, m.processado AS mensagem_processado,
+         classificacao.intencao AS mensagem_intencao
     FROM tickets t
     JOIN conversas c ON c.id = t.conversa_id
     JOIN clientes cl ON cl.id = c.cliente_id
@@ -118,48 +122,47 @@ function statusDoAtendente(valor: string | null): StatusAtendente {
 export class RepositorioDeFilaPg implements RepositorioDeFila {
   constructor(private readonly pool: Pool) {}
 
-  async listar(): Promise<Ticket[]> {
-    return this.carregar();
+  async listarAguardando(): Promise<Ticket[]> {
+    // Filtra e ordena no banco: a fila não carrega tickets encerrados nem seus históricos.
+    return this.carregar(
+      " WHERE t.status = 'AGUARDANDO'",
+      [],
+      ` ORDER BY ${ORDEM_SQL_DA_PRIORIDADE}, t.data_abertura, t.id, m.criado_em, m.id`
+    );
   }
 
-  async obterPorId(ticketId: string): Promise<Ticket | null> {
-    return (await this.carregar(ticketId))[0] ?? null;
+  async buscarPorId(id: string): Promise<Ticket | null> {
+    return (await this.carregar(" WHERE t.id = $1", [id], " ORDER BY t.id, m.criado_em, m.id"))[0] ?? null;
   }
 
-  async atribuirSeAguardando(ticketId: string, atendente: Atendente): Promise<boolean> {
+  async atribuirAtendente(ticketId: string, atendenteId: string): Promise<void> {
     const client = await this.pool.connect();
     let erroDeRollback: Error | undefined;
     try {
       await client.query("BEGIN");
       const ticket = await client.query<{ status: string }>(
-        "SELECT status FROM tickets WHERE protocolo = $1 FOR UPDATE", [ticketId]
+        "SELECT status FROM tickets WHERE id = $1 FOR UPDATE", [ticketId]
       );
-      if (ticket.rows[0]?.status !== StatusTicket.AGUARDANDO) {
-        await client.query("COMMIT");
-        return false;
-      }
+      if (ticket.rows.length === 0) throw new TicketNaoEncontradoError(ticketId);
+      if (ticket.rows[0].status !== StatusTicket.AGUARDANDO) throw new TicketIndisponivelError(ticketId);
 
-      // O cadastro é precondição explícita. Não sobrescrevemos nome/e-mail.
-      // FOR SHARE impede mudança de identidade/exclusão até o COMMIT.
-      const cadastro = await client.query<{ nome: string; email: string }>(
-        "SELECT nome, email FROM atendentes WHERE id = $1 FOR SHARE", [atendente.getId()]
-      );
-      const identidade = cadastro.rows[0];
-      if (!identidade) throw new AtendenteNaoCadastradoError(atendente.getId());
-      if (identidade.nome !== atendente.getNome() || identidade.email !== atendente.getEmail()) {
-        throw new IdentidadeAtendenteDivergenteError(atendente.getId());
-      }
+      // O cadastro é precondição explícita. atendentes.id é inteiro: um id que não é
+      // número nunca está cadastrado (e não chega ao banco como erro de conversão).
+      // FOR SHARE impede a exclusão do atendente até o COMMIT.
+      const cadastrado = /^-?\d{1,10}$/.test(atendenteId) && (await client.query(
+        "SELECT 1 FROM atendentes WHERE id = $1 FOR SHARE", [atendenteId]
+      )).rows.length === 1;
+      if (!cadastrado) throw new AtendenteNaoCadastradoError(atendenteId);
 
       const atribuicao = await client.query(
         `UPDATE tickets SET status = 'EM_ATENDIMENTO', atendente_id = $2
-         WHERE protocolo = $1 AND status = 'AGUARDANDO'`,
-        [ticketId, atendente.getId()]
+         WHERE id = $1 AND status = 'AGUARDANDO'`,
+        [ticketId, atendenteId]
       );
       if (atribuicao.rowCount !== 1) {
         throw new Error("A atribuição não atualizou o ticket bloqueado.");
       }
       await client.query("COMMIT");
-      return true;
     } catch (erro) {
       try {
         await client.query("ROLLBACK");
@@ -173,22 +176,19 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
     }
   }
 
-  private async carregar(ticketId?: string): Promise<Ticket[]> {
-    const filtro = ticketId === undefined ? "" : " WHERE t.protocolo = $1";
-    const { rows } = await this.pool.query<LinhaTicket>(
-      CONSULTA + filtro + " ORDER BY t.protocolo, m.criado_em, m.id",
-      ticketId === undefined ? [] : [ticketId]
-    );
+  /** As linhas chegam na ordem dos tickets; o Map preserva essa ordem ao agrupar. */
+  private async carregar(filtro: string, parametros: string[], ordem: string): Promise<Ticket[]> {
+    const { rows } = await this.pool.query<LinhaTicket>(CONSULTA + filtro + ordem, parametros);
     const grupos = new Map<string, { linha: LinhaTicket; mensagens: Mensagem[]; cliente: Cliente }>();
     for (const linha of rows) {
-      let grupo = grupos.get(linha.protocolo);
+      let grupo = grupos.get(linha.id);
       if (!grupo) {
         grupo = {
           linha, mensagens: [],
           // clientes não tem coluna de e-mail: o cliente reconstituído fica sem e-mail.
           cliente: new Cliente(linha.cliente_id, linha.cliente_nome, null, linha.cliente_telefone),
         };
-        grupos.set(linha.protocolo, grupo);
+        grupos.set(linha.id, grupo);
       }
       if (linha.mensagem_id !== null) {
         if (linha.mensagem_data === null || linha.mensagem_direcao === null) {
@@ -197,9 +197,10 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
         grupo.mensagens.push(Mensagem.reconstituir({
           id: linha.mensagem_id,
           direcao: linha.mensagem_direcao,
-          conteudo: linha.mensagem_texto,
-          dataHora: linha.mensagem_data,
-          remetente: linha.mensagem_direcao === "entrada" ? grupo.cliente : null,
+          texto: linha.mensagem_texto,
+          dataEnvio: linha.mensagem_data,
+          remetente: linha.mensagem_direcao === "entrada" ? grupo.cliente : CHATBOT_DAS_MENSAGENS,
+          processado: linha.mensagem_processado ?? false,
           intencaoDetectada: linha.mensagem_intencao,
         }));
       }
@@ -221,14 +222,14 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
         canal: null,
         cliente,
         chatbot: null,
-        dataInicio: null,
+        dataCriacao: linha.conversa_criada_em,
         dataFim: null,
         status: estadoDaConversa(linha.estado_conversa),
         estadoPersistido: linha.estado_conversa,
         mensagens,
       });
       return Ticket.reconstituir({
-        protocolo: linha.protocolo,
+        id: linha.id,
         assunto: linha.assunto,
         prioridade: prioridadePersistida(linha.prioridade),
         status: statusPersistido(linha.status),
