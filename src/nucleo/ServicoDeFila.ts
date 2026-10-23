@@ -5,9 +5,10 @@ import type { Mensagem } from "./entidades/Mensagem.js";
 import type { Ticket } from "./entidades/Ticket.js";
 
 const ORDEM_DE_PRIORIDADE: Record<Prioridade, number> = {
-  [Prioridade.ALTA]: 0,
-  [Prioridade.MEDIA]: 1,
-  [Prioridade.BAIXA]: 2,
+  [Prioridade.URGENTE]: 0,
+  [Prioridade.ALTA]: 1,
+  [Prioridade.MEDIA]: 2,
+  [Prioridade.BAIXA]: 3,
 };
 
 export class TicketNaoEncontradoError extends Error {

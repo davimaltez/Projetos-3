@@ -85,7 +85,7 @@ describe("RepositorioDeFilaPg — PostgreSQL isolado", { skip: !habilitado, conc
   }
 
   async function criarTicket(protocolo: string, opcoes: {
-    prioridade?: Prioridade; status?: StatusTicket; atendenteId?: number;
+    prioridade?: Prioridade; status?: StatusTicket; atendenteId?: number | string;
     dataAbertura?: Date; dataFechamento?: Date; estado?: string; nome?: string;
   } = {}): Promise<number> {
     const cliente = await poolA.query<{ id: number }>(

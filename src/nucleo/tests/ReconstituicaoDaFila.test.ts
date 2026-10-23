@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Atendente } from "../entidades/Atendente.js";
-import type { Cliente } from "../entidades/Cliente.js";
+import { Chatbot } from "../entidades/Chatbot.js";
+import { Cliente } from "../entidades/Cliente.js";
 import { Conversa } from "../entidades/Conversa.js";
 import { Prioridade, StatusConversa, StatusTicket } from "../entidades/Enums.js";
 import { Mensagem } from "../entidades/Mensagem.js";
 import { Ticket } from "../entidades/Ticket.js";
-import { Usuario } from "../entidades/Usuario.js";
 
-class ClienteHistorico extends Usuario<string | null> implements Cliente {}
-const cliente = new ClienteHistorico(17, null, null);
+// Cliente histórico: sem nome e sem e-mail cadastrados.
+const cliente = new Cliente(17, null, null, "5581999990017");
 const atendente = new Atendente(9, "Ana", "ana@example.test");
-const bot = { getId: () => 1, getNome: () => "Bot", getIdentificacao: () => "chatbot:1" };
+const bot = new Chatbot(1, "Bot", "simples", 2, true);
 const abertura = new Date("2026-01-01T10:00:00Z");
 const fechamento = new Date("2026-01-01T11:00:00Z");
 
@@ -32,7 +32,7 @@ test("reconstituição representa ausências sem criar identidades ou datas", ()
   assert.equal(conversa.getChatbot(), null);
   assert.equal(conversa.getCliente().getNome(), null);
   assert.equal(conversa.getCliente().getEmail(), null);
-  assert.equal(conversa.getCliente().getIdentificacao(), "usuario:17");
+  assert.equal(conversa.getCliente().getIdentificacao(), "cliente:17");
   const mensagem = Mensagem.reconstituir({
     id: 31, direcao: "saida", conteudo: null, dataHora: abertura,
     remetente: null, intencaoDetectada: null,

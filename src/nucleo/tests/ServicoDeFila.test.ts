@@ -4,23 +4,16 @@ import { RepositorioDeFilaEmMemoria } from "../../repositorios/RepositorioDeFila
 import type { RepositorioDeFila } from "../RepositorioDeFila.js";
 import { ServicoDeFila, TicketIndisponivelError, TicketNaoEncontradoError } from "../ServicoDeFila.js";
 import { Atendente } from "../entidades/Atendente.js";
-import type { Chatbot } from "../entidades/Chatbot.js";
-import type { Cliente } from "../entidades/Cliente.js";
+import { Chatbot } from "../entidades/Chatbot.js";
+import { Cliente } from "../entidades/Cliente.js";
 import { Conversa } from "../entidades/Conversa.js";
 import { Prioridade, StatusTicket } from "../entidades/Enums.js";
 import { Mensagem } from "../entidades/Mensagem.js";
 import { Ticket } from "../entidades/Ticket.js";
-import { Usuario } from "../entidades/Usuario.js";
 
 // Objetos fictícios: nenhuma configuração, credencial ou serviço externo é usado.
-class ClienteDeTeste extends Usuario implements Cliente {}
-
-const cliente = new ClienteDeTeste(1, "Cliente de teste", "cliente@example.com");
-const bot: Chatbot = {
-  getId: () => 1,
-  getNome: () => "Bot de teste",
-  getIdentificacao: () => "chatbot:1",
-};
+const cliente = new Cliente(1, "Cliente de teste", "cliente@example.com", "5581999990001");
+const bot = new Chatbot(1, "Bot de teste", "simples", 2, true);
 const ana = new Atendente(2, "Ana", "ana@example.com");
 const bruno = new Atendente(3, "Bruno", "bruno@example.com");
 

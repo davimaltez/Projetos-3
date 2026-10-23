@@ -1,24 +1,21 @@
 import type { Pool } from "pg";
 import type { RepositorioDeFila } from "../nucleo/RepositorioDeFila.js";
 import { Atendente } from "../nucleo/entidades/Atendente.js";
-import type { Cliente } from "../nucleo/entidades/Cliente.js";
+import { Cliente } from "../nucleo/entidades/Cliente.js";
 import { Conversa } from "../nucleo/entidades/Conversa.js";
-import { Prioridade, StatusConversa, StatusTicket } from "../nucleo/entidades/Enums.js";
+import { Prioridade, StatusAtendente, StatusConversa, StatusTicket } from "../nucleo/entidades/Enums.js";
 import { Mensagem } from "../nucleo/entidades/Mensagem.js";
 import { Ticket } from "../nucleo/entidades/Ticket.js";
-import { Usuario } from "../nucleo/entidades/Usuario.js";
-
-class ClienteReconstituido extends Usuario<string | null> implements Cliente {}
 
 export class AtendenteNaoCadastradoError extends Error {
-  constructor(id: number) {
+  constructor(id: number | string) {
     super(`Atendente ${id} não cadastrado. Cadastre a identidade antes da atribuição.`);
     this.name = "AtendenteNaoCadastradoError";
   }
 }
 
 export class IdentidadeAtendenteDivergenteError extends Error {
-  constructor(id: number) {
+  constructor(id: number | string) {
     super(`A identidade recebida para o atendente ${id} diverge do cadastro.`);
     this.name = "IdentidadeAtendenteDivergenteError";
   }
@@ -36,9 +33,12 @@ interface LinhaTicket {
   estado_conversa: string;
   cliente_id: number;
   cliente_nome: string | null;
+  cliente_telefone: string;
   atendente_id: number | null;
   atendente_nome: string | null;
   atendente_email: string | null;
+  atendente_status: string | null;
+  atendente_especialidade: string | null;
   mensagem_id: number | null;
   mensagem_texto: string | null;
   mensagem_data: Date | null;
@@ -51,8 +51,9 @@ interface LinhaTicket {
 const CONSULTA = `
   SELECT t.protocolo, t.assunto, t.prioridade, t.status,
          t.data_abertura, t.data_fechamento, t.resumo_bot, t.conversa_id,
-         c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome,
+         c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome, cl.telefone AS cliente_telefone,
          t.atendente_id, a.nome AS atendente_nome, a.email AS atendente_email,
+         a.status AS atendente_status, a.especialidade AS atendente_especialidade,
          m.id AS mensagem_id, m.texto AS mensagem_texto, m.criado_em AS mensagem_data,
          m.direcao AS mensagem_direcao, classificacao.intencao AS mensagem_intencao
     FROM tickets t
@@ -75,6 +76,8 @@ const CONSULTA = `
 
 function prioridadePersistida(valor: string): Prioridade {
   switch (valor) {
+    // URGENTE ainda é recusado pelo CHECK de tickets.prioridade (ver db/schema.sql).
+    case Prioridade.URGENTE: return Prioridade.URGENTE;
     case Prioridade.ALTA: return Prioridade.ALTA;
     case Prioridade.MEDIA: return Prioridade.MEDIA;
     case Prioridade.BAIXA: return Prioridade.BAIXA;
@@ -96,8 +99,18 @@ function estadoDaConversa(valor: string): StatusConversa | null {
     case "BOT":
     case StatusConversa.COM_BOT: return StatusConversa.COM_BOT;
     case StatusConversa.AGUARDANDO_ATENDENTE: return StatusConversa.AGUARDANDO_ATENDENTE;
+    case StatusConversa.EM_ATENDIMENTO: return StatusConversa.EM_ATENDIMENTO;
     case StatusConversa.ENCERRADA: return StatusConversa.ENCERRADA;
     default: return null; // O texto original fica disponível na conversa.
+  }
+}
+
+function statusDoAtendente(valor: string | null): StatusAtendente {
+  switch (valor) {
+    case StatusAtendente.DISPONIVEL: return StatusAtendente.DISPONIVEL;
+    case StatusAtendente.OCUPADO: return StatusAtendente.OCUPADO;
+    case StatusAtendente.OFFLINE: return StatusAtendente.OFFLINE;
+    default: throw new Error("Status de atendente persistido inválido.");
   }
 }
 
@@ -172,7 +185,8 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
       if (!grupo) {
         grupo = {
           linha, mensagens: [],
-          cliente: new ClienteReconstituido(linha.cliente_id, linha.cliente_nome, null),
+          // clientes não tem coluna de e-mail: o cliente reconstituído fica sem e-mail.
+          cliente: new Cliente(linha.cliente_id, linha.cliente_nome, null, linha.cliente_telefone),
         };
         grupos.set(linha.protocolo, grupo);
       }
@@ -197,7 +211,10 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
         if (linha.atendente_nome === null || linha.atendente_email === null) {
           throw new Error("Ticket persistido sem identidade completa do atendente.");
         }
-        atendente = new Atendente(linha.atendente_id, linha.atendente_nome, linha.atendente_email);
+        atendente = new Atendente(
+          linha.atendente_id, linha.atendente_nome, linha.atendente_email,
+          statusDoAtendente(linha.atendente_status), linha.atendente_especialidade
+        );
       }
       const conversa = Conversa.reconstituir({
         id: linha.conversa_id,
