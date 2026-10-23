@@ -1,5 +1,15 @@
 # Etapa 3 — schema e migração da fila
 
+> **Atualização (migração 002, plano das duplas):** `tickets.protocolo` passou a se
+> chamar `tickets.id` (o valor continua sendo o protocolo), a prioridade aceita
+> `URGENTE` (atendida antes de `ALTA`, também no índice `idx_tickets_fila`) e
+> `conversas` ganhou `criado_em` (Conversa.dataCriacao). Bancos que já têm a 001
+> aplicam `db/migrations/002_fila_conforme_plano.sql`; conversas antigas recebem
+> como criação a data da primeira mensagem (ou a última atualização, se não houver
+> mensagens). Instalação nova: `db/schema.sql` já está no estado final.
+> Verificado: schema novo e "schema antigo + 001 + 002" geram o mesmo `pg_dump`.
+> O texto abaixo descreve a 001.
+
 Esta etapa adiciona `atendentes`, `tickets` e índices. Não implementa o
 repositório PostgreSQL, não altera entidades e não conecta a fila à aplicação.
 

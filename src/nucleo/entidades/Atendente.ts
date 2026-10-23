@@ -51,7 +51,7 @@ export class Atendente extends Usuario implements Remetente {
     if (this.#status !== StatusAtendente.DISPONIVEL) {
       throw new Error("O atendente precisa estar DISPONIVEL para assumir um ticket.");
     }
-    t.atribuir(this);
+    t.atribuirAtendente(this);
     this.#status = StatusAtendente.OCUPADO;
   }
 

@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS conversas (
   estado TEXT NOT NULL DEFAULT 'BOT',
   fluxo TEXT,
   contexto JSONB NOT NULL DEFAULT '{}',
-  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Conversa.dataCriacao (plano da Dupla 2). Bancos existentes: migração 002.
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS mensagens (
@@ -64,7 +66,8 @@ CREATE TABLE IF NOT EXISTS administradores (
 );
 
 -- Etapa 3: fila humana. Este bloco é para instalação nova; bancos existentes
--- devem usar db/migrations/001_fila_atendimento_humano.sql (ver docs/migracao-fila.md).
+-- devem usar db/migrations/001_fila_atendimento_humano.sql e depois
+-- db/migrations/002_fila_conforme_plano.sql (ver docs/migracao-fila.md).
 BEGIN;
 SET LOCAL search_path = public, pg_catalog;
 
@@ -80,7 +83,8 @@ CREATE TABLE atendentes (
 );
 
 CREATE TABLE tickets (
-  protocolo TEXT CONSTRAINT tickets_pkey PRIMARY KEY,
+  -- O id do ticket é o protocolo mostrado ao cliente.
+  id TEXT CONSTRAINT tickets_pkey PRIMARY KEY,
   conversa_id INTEGER NOT NULL,
   atendente_id INTEGER,
   assunto TEXT NOT NULL,
@@ -95,7 +99,7 @@ CREATE TABLE tickets (
   CONSTRAINT tickets_atendente_fk
     FOREIGN KEY (atendente_id) REFERENCES atendentes(id) ON DELETE RESTRICT,
   CONSTRAINT tickets_prioridade_check
-    CHECK (prioridade IN ('ALTA', 'MEDIA', 'BAIXA')),
+    CHECK (prioridade IN ('URGENTE', 'ALTA', 'MEDIA', 'BAIXA')),
   CONSTRAINT tickets_status_check
     CHECK (status IN ('AGUARDANDO', 'EM_ATENDIMENTO', 'ENCERRADO')),
   CONSTRAINT tickets_estado_check CHECK (
@@ -110,12 +114,12 @@ CREATE TABLE tickets (
 -- UNIQUE(conversa_id) já cria o índice desse relacionamento.
 CREATE INDEX idx_tickets_atendente ON tickets (atendente_id);
 
--- A ordem do enum não é alfabética: ALTA, MEDIA, BAIXA.
--- Disponível para consultas SQL futuras; o serviço atual continua ordenando a fila.
+-- A ordem da fila não é alfabética: URGENTE, ALTA, MEDIA, BAIXA.
+-- Mesma expressão usada pelo RepositorioDeFilaPg.listarAguardando().
 CREATE INDEX idx_tickets_fila ON tickets (
-  (CASE prioridade WHEN 'ALTA' THEN 0 WHEN 'MEDIA' THEN 1 ELSE 2 END),
+  (CASE prioridade WHEN 'URGENTE' THEN 0 WHEN 'ALTA' THEN 1 WHEN 'MEDIA' THEN 2 ELSE 3 END),
   data_abertura,
-  protocolo
+  id
 ) WHERE status = 'AGUARDANDO';
 
 CREATE INDEX idx_mensagens_conversa_historico
