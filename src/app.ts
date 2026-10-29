@@ -16,6 +16,8 @@ import type { ClassificadorDeIntencao } from "./nucleo/ClassificadorDeIntencao.j
 import { ClassificadorGemini } from "./ia/ClassificadorGemini.js";
 import { ServidorHttp } from "./http/ServidorHttp.js";
 import { ContextoMenuRepositorio } from "./repositorios/ContextoMenuRepositorio.js";
+import { ServicoContratadoRepositorio } from "./repositorios/ServicoContratadoRepositorio.js";
+import { RespostaDeServicoContratado } from "./nucleo/RespostaDeServicoContratado.js";
 
 const UM_MINUTO_MS = 60_000;
 
@@ -46,6 +48,8 @@ async function main(): Promise<void> {
       : "[app] GEMINI_API_KEY vazia: rodando sem IA, só com o menu"
   );
 
+  // O mesmo menu é usado pelo atendimento e pela resposta "sem serviço cadastrado" (história 1.3).
+  const menu = new Menu(topicosDoMenu());
   const atendimento = new Atendimento(
     canal,
     new ClienteRepositorio(banco.pool),
@@ -54,7 +58,7 @@ async function main(): Promise<void> {
     new EventoRepositorio(banco.pool),
     new ContextoMenuRepositorio(banco.pool),   // <- linha nova
     classificador,
-    new Menu(topicosDoMenu()),
+    menu,
     {
       confiancaMinima: config.iaConfiancaMinima,
       // Avisos ("instabilidade", "muitas mensagens"): no máximo 1 por minuto para cada remetente.
@@ -63,7 +67,8 @@ async function main(): Promise<void> {
       // 0 = sem limite de mensagens por remetente.
       limiteDeMensagens:
         config.limiteMensagensPorMinuto > 0 ? new LimitadorDeTaxa(config.limiteMensagensPorMinuto, UM_MINUTO_MS) : null,
-    }
+    },
+    new RespostaDeServicoContratado(new ServicoContratadoRepositorio(banco.pool), menu)
   );
   console.log(
     config.limiteMensagensPorMinuto > 0
