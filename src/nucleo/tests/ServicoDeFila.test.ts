@@ -154,6 +154,8 @@ describe("ServicoDeFila.assumirTicket", () => {
   test("recusa quando o repositório detecta disputa após uma leitura que ainda mostrava AGUARDANDO", async () => {
     const leituraAnterior = criarTicket("disputado");
     const repositorio: RepositorioDeFila = {
+      enfileirar: async () => leituraAnterior,
+      obterAbertoPorConversa: async () => leituraAnterior,
       listar: async () => [leituraAnterior],
       obterPorId: async () => leituraAnterior,
       atribuirSeAguardando: async () => false,
@@ -211,6 +213,19 @@ describe("ServicoDeFila.obterHistoricoDoTicket", () => {
 });
 
 describe("RepositorioDeFilaEmMemoria", () => {
+  test("enfileira conversa cadastrada uma vez e recusa uma conversa inexistente", async () => {
+    const conversa = criarTicket("base").getConversa();
+    const repositorio = new RepositorioDeFilaEmMemoria([], [conversa]);
+    const servico = new ServicoDeFila(repositorio);
+    const resultados = await Promise.all([
+      servico.solicitarAtendimentoHumano(conversa.getId()), servico.solicitarAtendimentoHumano(conversa.getId()),
+    ]);
+    assert.equal(resultados[0], resultados[1]);
+    assert.equal((await servico.listarFila()).length, 1);
+    assert.equal(await servico.obterAtendimentoHumano(conversa.getId()), resultados[0]);
+    await assert.rejects(servico.solicitarAtendimentoHumano(999), /Conversa não encontrada/);
+  });
+
   test("as listas de entrada e de saída não permitem remover tickets do armazenamento", async () => {
     const ticket = criarTicket("armazenado");
     const entrada = [ticket];

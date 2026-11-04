@@ -13,5 +13,6 @@ export enum StatusTicket {
 export enum StatusConversa {
   COM_BOT = "COM_BOT",
   AGUARDANDO_ATENDENTE = "AGUARDANDO_ATENDENTE",
+  EM_ATENDIMENTO = "EM_ATENDIMENTO",
   ENCERRADA = "ENCERRADA",
 }

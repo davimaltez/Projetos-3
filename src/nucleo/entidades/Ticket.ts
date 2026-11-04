@@ -39,6 +39,20 @@ export class Ticket {
         return this.protocolo;
     }
 
+    /** Carrega um ticket existente sem executar novamente atribuição ou fechamento. */
+    public static restaurar(dados: {
+        protocolo: string; assunto: string; prioridade: Prioridade; dataAbertura: Date;
+        resumoBot: string; conversa: Conversa; status: StatusTicket;
+        atendente: Atendente | null; dataFechamento: Date | null;
+    }): Ticket {
+        const ticket = new Ticket(dados.protocolo, dados.assunto, dados.prioridade,
+            dados.dataAbertura, dados.resumoBot, dados.conversa);
+        ticket.status = dados.status;
+        ticket.atendente = dados.atendente;
+        ticket.dataFechamento = dados.dataFechamento === null ? null : new Date(dados.dataFechamento.getTime());
+        return ticket;
+    }
+
     public getAssunto(): string {
         return this.assunto;
     }
@@ -84,6 +98,7 @@ export class Ticket {
             );
         }
 
+        this.conversa.iniciarAtendimento();
         this.atendente = a;
         this.status = StatusTicket.EM_ATENDIMENTO;
     }

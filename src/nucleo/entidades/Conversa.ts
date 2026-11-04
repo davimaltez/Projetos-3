@@ -49,6 +49,24 @@ export class Conversa {
         return this.id;
     }
 
+    /** Reconstrói o estado persistido sem gerar novo ticket ou alterar datas. */
+    public static restaurar(dados: {
+        id: number; canal: string; cliente: Cliente; chatbot: Chatbot;
+        dataInicio: Date; status: StatusConversa; mensagens: Mensagem[];
+    }): Conversa {
+        const conversa = new Conversa(dados.id, dados.canal, dados.cliente, dados.chatbot, dados.dataInicio);
+        conversa.status = dados.status;
+        conversa.mensagens = [...dados.mensagens];
+        return conversa;
+    }
+
+    public iniciarAtendimento(): void {
+        if (this.status === StatusConversa.ENCERRADA) {
+            throw new Error("Nao e possivel atender uma conversa encerrada.");
+        }
+        this.status = StatusConversa.EM_ATENDIMENTO;
+    }
+
     public getCanal(): string {
         return this.canal;
     }

@@ -28,6 +28,14 @@ export class TicketIndisponivelError extends Error {
 export class ServicoDeFila {
   constructor(private readonly repositorio: RepositorioDeFila) {}
 
+  async solicitarAtendimentoHumano(conversaId: number): Promise<Ticket> {
+    return this.repositorio.enfileirar(conversaId);
+  }
+
+  async obterAtendimentoHumano(conversaId: number): Promise<Ticket | null> {
+    return this.repositorio.obterAbertoPorConversa(conversaId);
+  }
+
   async listarFila(): Promise<Ticket[]> {
     const tickets = await this.repositorio.listar();
     return tickets

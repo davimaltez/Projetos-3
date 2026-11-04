@@ -3,6 +3,11 @@ import type { Ticket } from "./entidades/Ticket.js";
 
 /** Persistência necessária à fila, independente de banco ou canal de atendimento. */
 export interface RepositorioDeFila {
+  /** Cria no máximo um ticket aberto por conversa e atualiza seu estado atomicamente. */
+  enfileirar(conversaId: number): Promise<Ticket>;
+
+  obterAbertoPorConversa(conversaId: number): Promise<Ticket | null>;
+
   /** Retorna uma lista própria; filtrar e ordenar a fila é responsabilidade do serviço. */
   listar(): Promise<Ticket[]>;
 
