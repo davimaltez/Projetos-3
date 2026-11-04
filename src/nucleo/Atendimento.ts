@@ -2,6 +2,8 @@ import type { CanalMensagens, MensagemRecebida } from "./CanalMensagens.js";
 import type { ClassificadorDeIntencao } from "./ClassificadorDeIntencao.js";
 import type { LimitadorDeTaxa } from "./LimitadorDeTaxa.js";
 import type { Menu } from "./Menu.js";
+import type { ServicoDeFila } from "./ServicoDeFila.js";
+import { StatusTicket } from "./entidades/Enums.js";
 import { mascararRemetente, resumirTextoParaLog } from "./PrivacidadeDeLog.js";
 import type {
   RepositorioDeClientes,
@@ -68,6 +70,7 @@ const TEXTO_DE_EXCESSO = "Recebi muitas mensagens em pouco tempo. Aguarde um mom
 export class Atendimento {
   /** Mensagens sendo processadas agora (por idExterno). Ver processar(). */
   private readonly emAndamento = new Set<string>();
+  private readonly porRemetente = new Map<string, Promise<void>>();
 
   constructor(
     private readonly canal: CanalMensagens,
@@ -78,7 +81,8 @@ export class Atendimento {
     private readonly contextoMenu: RepositorioDeContextoDoMenu,
     private readonly classificador: ClassificadorDeIntencao | null,
     private readonly menu: Menu,
-    private readonly opcoes: OpcoesDeAtendimento
+    private readonly opcoes: OpcoesDeAtendimento,
+    private readonly fila: ServicoDeFila
   ) {}
 
   async processar(mensagem: MensagemRecebida): Promise<void> {
@@ -86,14 +90,21 @@ export class Atendimento {
     // veria "processado = false" no banco e responderia de novo (ver registrarEntrada).
     if (this.emAndamento.has(mensagem.idExterno)) return;
     this.emAndamento.add(mensagem.idExterno);
-    try {
+    // Preserva a ordem do menu e da transferência em eventos separados do canal.
+    const anterior = this.porRemetente.get(mensagem.remetente) ?? Promise.resolve();
+    const atual = anterior.catch(() => {}).then(async () => {
       if (this.opcoes.limiteDeMensagens && !this.opcoes.limiteDeMensagens.tentar(mensagem.remetente)) {
         await this.recusarExcesso(mensagem);
         return;
       }
       await this.atender(mensagem);
+    });
+    this.porRemetente.set(mensagem.remetente, atual);
+    try {
+      await atual;
     } finally {
       this.emAndamento.delete(mensagem.idExterno);
+      if (this.porRemetente.get(mensagem.remetente) === atual) this.porRemetente.delete(mensagem.remetente);
     }
   }
 
@@ -102,13 +113,27 @@ export class Atendimento {
     if (registro === null) return; // já processada (respondida e gravada): não responder de novo
     const { conversaId, entradaId } = registro;
 
+    const caminhoAnterior = await this.caminhoAtual(conversaId);
+    const humano = await this.operarFila(mensagem, () => this.fila.obterAtendimentoHumano(conversaId));
+    // Durante a espera/atendimento, registra novas entradas para o operador, sem menu ou IA.
+    // Um pedido explícito repetido recebe o mesmo protocolo, inclusive após falha de envio.
+    if (humano && !this.pedidoExplicitoDeHumano(mensagem.texto, caminhoAnterior)) {
+      await this.mensagens.marcarProcessada(entradaId);
+      return;
+    }
+
     // História 1.6: "digitando..." desde o início do processamento, inclusive enquanto a IA pensa.
     await this.canal.indicarDigitando(mensagem.enderecoResposta);
 
     // História 1.1: em que nível do menu o cliente está (vazio = menu principal).
-    const caminhoAnterior = await this.caminhoAtual(conversaId);
     const decisao = await this.decidir(mensagem.texto, caminhoAnterior);
-    const resposta = this.textoDaResposta(decisao);
+    const ticket = decisao.topico?.id === "atendimento_humano"
+      ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId)) : null;
+    const resposta = ticket
+      ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
+        ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
+        : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
+      : this.textoDaResposta(decisao);
 
     // Log sem dados pessoais: telefone mascarado e só o começo do texto (ver PrivacidadeDeLog).
     console.log(
@@ -196,6 +221,10 @@ export class Atendimento {
   }
 
   private async decidir(texto: string, caminhoMenu: readonly string[]): Promise<Decisao> {
+    if (this.comandoDeHumano(texto)) {
+      return { ...SEM_IA, topico: TOPICOS.find((t) => t.id === "atendimento_humano")!,
+        origem: "menu", texto: null, caminhoMenu: [] };
+    }
     // 1) Número: NUNCA chama a IA. Vale para o nível do menu em que o cliente está.
     const leitura = this.menu.interpretar(texto, caminhoMenu);
     if (leitura.tipo === "opcao") {
@@ -235,6 +264,25 @@ export class Atendimento {
       console.error("[atendimento] classificador falhou, exibindo menu:", erro instanceof Error ? erro.message : erro);
       return { topico: null, origem: "ia_falhou", confianca: null, latenciaIaMs: Date.now() - inicio, texto: null, caminhoMenu: [] };
     }
+  }
+
+  private comandoDeHumano(texto: string): boolean {
+    return /^(?:falar com (?:um |uma )?)?(?:atendente|humano|pessoa)[.!?]?$/.test(texto.trim().toLowerCase());
+  }
+
+  private async operarFila<T>(mensagem: MensagemRecebida, operacao: () => Promise<T>): Promise<T> {
+    try {
+      return await operacao();
+    } catch (erro) {
+      await this.avisar(mensagem, this.opcoes.avisosDeInstabilidade, TEXTO_DE_INSTABILIDADE);
+      throw erro;
+    }
+  }
+
+  private pedidoExplicitoDeHumano(texto: string, caminho: readonly string[]): boolean {
+    if (this.comandoDeHumano(texto)) return true;
+    const leitura = this.menu.interpretar(texto, caminho);
+    return leitura.tipo === "opcao" && leitura.topico.id === "atendimento_humano";
   }
 
   /** Nível atual do menu. Se o banco falhar aqui, o cliente cai no menu principal (nunca fica sem resposta). */

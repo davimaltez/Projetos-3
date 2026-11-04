@@ -26,8 +26,10 @@ export class Config {
   readonly limiteMensagensPorMinuto: number;
   readonly digitandoMinimoMs: number;
   readonly digitandoMaximoMs: number;
+  readonly operadoresHttpJson: string;
 
   private constructor(env: NodeJS.ProcessEnv) {
+    this.operadoresHttpJson = env.OPERADORES_HTTP_JSON?.trim() || "[]";
     this.digitandoMinimoMs = Config.numero(env, "DIGITANDO_MIN_MS", 1_500, { minimo: 0 });
     this.digitandoMaximoMs = Config.numero(env, "DIGITANDO_MAX_MS", 4_000, { minimo: 0 });
     if (this.digitandoMaximoMs < this.digitandoMinimoMs) {
