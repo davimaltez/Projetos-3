@@ -1,5 +1,12 @@
 # Etapa 3 — schema e migração da fila
 
+> **Integração atual:** `npm run db:migrate` reconhece bancos novos, legados,
+> atualizados pela 001/002 e o primeiro formato da branch servico-de-fila (003).
+> O comando preserva dados e executa somente o caminho necessário em transação.
+> Bancos já no formato atual são verificados sem recriar tabelas. A documentação
+> abaixo registra também o procedimento manual e as decisões da entrega original.
+> O executor não inicia WhatsApp ou Gemini. Ver [serviço integrado](servico-de-fila.md).
+
 > **Atualização (migração 002, plano das duplas):** `tickets.protocolo` passou a se
 > chamar `tickets.id` (o valor continua sendo o protocolo), a prioridade aceita
 > `URGENTE` (atendida antes de `ALTA`, também no índice `idx_tickets_fila`) e

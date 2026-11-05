@@ -133,6 +133,7 @@ export class Ticket {
             );
         }
 
+        this.conversa.iniciarAtendimento();
         this.atendente = atendente;
         this.status = StatusTicket.EM_ATENDIMENTO;
     }

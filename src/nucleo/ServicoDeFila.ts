@@ -13,6 +13,15 @@ export { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila
 export class ServicoDeFila {
   constructor(private readonly repositorio: RepositorioDeFila) {}
 
+  async solicitarAtendimentoHumano(conversaId: number): Promise<Ticket> {
+    return this.repositorio.enfileirar(conversaId);
+  }
+
+  async obterAtendimentoHumano(conversaId: number): Promise<Ticket | null> {
+    const ticket = await this.repositorio.buscarPorConversa(conversaId);
+    return ticket?.getStatus() === StatusTicket.ENCERRADO ? null : ticket;
+  }
+
   /** Tickets aguardando, por prioridade e tempo de espera. */
   async listarFila(): Promise<Ticket[]> {
     const tickets = await this.repositorio.listarAguardando();

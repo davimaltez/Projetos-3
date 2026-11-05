@@ -63,6 +63,7 @@ export class Menu {
     const nivel = this.resolver(caminho) ?? this.nivelRaiz();
     const linhas = nivel.opcoes.map((opcao, i) => `${i + 1} - ${opcao.rotulo}`);
     if (!nivel.ehRaiz) linhas.push("0 - Voltar");
+    if (!nivel.ehRaiz) linhas.push('Para falar com um atendente, envie "atendente".');
     const cabecalho = nivel.titulo ? `*${nivel.titulo}*\n${CABECALHO_SUBMENU}` : CABECALHO_PRINCIPAL;
     return [cabecalho, ...linhas].join("\n");
   }
@@ -220,6 +221,7 @@ export class Menu {
 function respostaDe(no: No): string | undefined {
   return "respostaProvisoria" in no ? no.respostaProvisoria : no.resposta;
 }
+
 
 function ehPergunta(no: No): boolean {
   return "acao" in no && no.acao === "perguntar";

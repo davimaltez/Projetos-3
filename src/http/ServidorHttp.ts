@@ -4,6 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CanalMensagens } from "../nucleo/CanalMensagens.js";
 import type { BancoDeDados } from "../repositorios/BancoDeDados.js";
+import type { ServicoDeFila } from "../nucleo/ServicoDeFila.js";
+import type { AutenticadorDeOperador } from "./AutenticadorDeOperador.js";
+import { rotasDaFila } from "./RotasDaFila.js";
 
 // src/http/ (dev, tsx) e dist/http/ (build) ficam a dois níveis da raiz do projeto.
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -17,9 +20,11 @@ export class ServidorHttp {
   constructor(
     private readonly porta: number,
     private readonly host: string,
-    private readonly canal: CanalMensagens,
-    private readonly banco: BancoDeDados,
-    private readonly iaConfigurada: boolean
+    private readonly canal: Pick<CanalMensagens, "estaConectado">,
+    private readonly banco: Pick<BancoDeDados, "verificar">,
+    private readonly iaConfigurada: boolean,
+    private readonly fila: ServicoDeFila,
+    private readonly autenticador: AutenticadorDeOperador
   ) {
     this.registrarRotas();
   }
@@ -42,9 +47,17 @@ export class ServidorHttp {
       res.status(banco && whatsapp ? 200 : 503).json({ whatsapp, banco, ia: this.iaConfigurada });
     });
 
+    // Mantém a autenticação restrita às rotas do operador; diagnósticos seguem públicos.
+    this.app.use(rotasDaFila(this.fila, this.autenticador));
+
     // Páginas e imagens da entrega anterior: / (index.html), /status.html, /style.css, /assets/...
     this.app.use(express.static(PASTA_INTERFACE));
     this.app.use("/assets", express.static(PASTA_ASSETS));
+  }
+
+  get portaEmUso(): number | undefined {
+    const endereco = this.servidor?.address();
+    return endereco && typeof endereco === "object" ? endereco.port : undefined;
   }
 
   /** Resolve quando o servidor está escutando; rejeita com mensagem clara se não conseguir (porta ocupada etc.). */
@@ -63,7 +76,7 @@ export class ServidorHttp {
         );
       });
       servidor.once("listening", () => {
-        console.log(`Servidor rodando em http://${this.host === "0.0.0.0" ? "localhost" : this.host}:${this.porta}`);
+        console.log(`Servidor rodando em http://${this.host === "0.0.0.0" ? "localhost" : this.host}:${this.portaEmUso}`);
         // Depois de subir, um erro solto não pode derrubar o processo sem explicação.
         servidor.on("error", (erro) => console.error("[http] erro no servidor:", erro));
         resolve();

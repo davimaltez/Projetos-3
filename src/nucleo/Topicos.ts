@@ -9,6 +9,7 @@ export type IdTopico =
   | "status_demanda"
   | "operacao_sistema"
   | "topico_3"
+  | "atendimento_humano"
   | "topico_4"
   | "relatorio_admin";
 
@@ -124,12 +125,12 @@ export const TOPICOS: readonly Topico[] = [
       ],
   },
   {
-    id: "topico_3",
+    id: "atendimento_humano",
     caminho: 3,
-    rotulo: "Tópico 3",
-    descricao: "A definir: depende das perguntas frequentes que a WXN ainda vai informar.",
-    respostaProvisoria: "Esse assunto ainda não está disponível por aqui.",
-    ativo: false,
+    rotulo: "Falar com um atendente",
+    descricao: "O usuário pede explicitamente para falar com uma pessoa, atendente ou suporte humano.",
+    respostaProvisoria: "Vou encaminhar você para um atendente.",
+    ativo: true,
     somenteAdmin: false,
   },
   {

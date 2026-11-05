@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { randomUUID } from "node:crypto";
 import { AtendenteNaoCadastradoError, TicketIndisponivelError, TicketNaoEncontradoError } from "../nucleo/ErrosDaFila.js";
 import type { RepositorioDeFila } from "../nucleo/RepositorioDeFila.js";
 import { Atendente } from "../nucleo/entidades/Atendente.js";
@@ -118,9 +119,55 @@ function statusDoAtendente(valor: string | null): StatusAtendente {
   }
 }
 
-/** Adaptador da fila; não cadastra atendentes nem cria/fecha tickets. */
+/** Persistência da fila e da transferência; o cadastro de operadores fica em AtendenteRepositorio. */
 export class RepositorioDeFilaPg implements RepositorioDeFila {
   constructor(private readonly pool: Pool) {}
+
+  async buscarPorConversa(conversaId: number): Promise<Ticket | null> {
+    return (await this.carregar(" WHERE t.conversa_id = $1", [String(conversaId)],
+      " ORDER BY m.criado_em, m.id"))[0] ?? null;
+  }
+
+  async enfileirar(conversaId: number): Promise<Ticket> {
+    const db = await this.pool.connect();
+    let erroDeRollback: Error | undefined;
+    try {
+      await db.query("BEGIN");
+      const { rows } = await db.query<{ id: number; estado: string }>(
+        "SELECT id, estado FROM conversas WHERE id = $1 FOR UPDATE", [conversaId]);
+      if (!rows[0]) throw new Error("Conversa não encontrada.");
+      const existente = await this.carregar(" WHERE t.conversa_id = $1", [String(conversaId)],
+        " ORDER BY m.criado_em, m.id", db);
+      if (existente[0]?.getStatus() === StatusTicket.ENCERRADO) {
+        throw new TicketIndisponivelError(existente[0].getId());
+      }
+      if (existente[0]) {
+        await db.query("COMMIT");
+        return existente[0];
+      }
+      if (rows[0].estado === StatusConversa.ENCERRADA) throw new Error("Conversa encerrada.");
+      const id = randomUUID();
+      // O resumo é fixado na abertura; o histórico continua vindo da tabela mensagens.
+      await db.query(`INSERT INTO tickets (id, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
+        SELECT $1, c.id, 'Atendimento humano', 'MEDIA', now(),
+          COALESCE((SELECT string_agg(m.texto, E'\\n' ORDER BY m.criado_em, m.id)
+            FROM mensagens m WHERE m.conversa_id = c.id AND m.texto <> ''), '')
+        FROM conversas c WHERE c.id = $2`, [id, conversaId]);
+      await db.query("UPDATE conversas SET estado = $2, atualizado_em = now() WHERE id = $1",
+        [conversaId, StatusConversa.AGUARDANDO_ATENDENTE]);
+      await db.query(`INSERT INTO eventos (conversa_id, tipo, origem, dados)
+        VALUES ($1, 'transferencia_humana', 'fila', $2)`, [conversaId, JSON.stringify({ protocolo: id })]);
+      const [ticket] = await this.carregar(" WHERE t.id = $1", [id], " ORDER BY m.criado_em, m.id", db);
+      await db.query("COMMIT");
+      return ticket;
+    } catch (erro) {
+      try { await db.query("ROLLBACK"); }
+      catch (falha) { erroDeRollback = falha instanceof Error ? falha : new Error("Falha no rollback."); }
+      throw erro;
+    } finally {
+      db.release(erroDeRollback);
+    }
+  }
 
   async listarAguardando(): Promise<Ticket[]> {
     // Filtra e ordena no banco: a fila não carrega tickets encerrados nem seus históricos.
@@ -162,6 +209,11 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
       if (atribuicao.rowCount !== 1) {
         throw new Error("A atribuição não atualizou o ticket bloqueado.");
       }
+      await client.query(`UPDATE conversas SET estado = $2, atualizado_em = now()
+        WHERE id = (SELECT conversa_id FROM tickets WHERE id = $1)`, [ticketId, StatusConversa.EM_ATENDIMENTO]);
+      await client.query(`INSERT INTO eventos (conversa_id, tipo, origem, dados)
+        SELECT conversa_id, 'ticket_assumido', 'operador_http', $2 FROM tickets WHERE id = $1`,
+        [ticketId, JSON.stringify({ protocolo: ticketId, atendenteId })]);
       await client.query("COMMIT");
     } catch (erro) {
       try {
@@ -177,8 +229,9 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
   }
 
   /** As linhas chegam na ordem dos tickets; o Map preserva essa ordem ao agrupar. */
-  private async carregar(filtro: string, parametros: string[], ordem: string): Promise<Ticket[]> {
-    const { rows } = await this.pool.query<LinhaTicket>(CONSULTA + filtro + ordem, parametros);
+  private async carregar(filtro: string, parametros: string[], ordem: string,
+    db: Pick<Pool, "query"> = this.pool): Promise<Ticket[]> {
+    const { rows } = await db.query<LinhaTicket>(CONSULTA + filtro + ordem, parametros);
     const grupos = new Map<string, { linha: LinhaTicket; mensagens: Mensagem[]; cliente: Cliente }>();
     for (const linha of rows) {
       let grupo = grupos.get(linha.id);

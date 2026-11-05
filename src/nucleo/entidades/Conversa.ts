@@ -89,6 +89,13 @@ export class Conversa {
         return this.id;
     }
 
+    public iniciarAtendimento(): void {
+        if (this.status === StatusConversa.ENCERRADA) {
+            throw new Error("Nao e possivel atender uma conversa encerrada.");
+        }
+        this.status = StatusConversa.EM_ATENDIMENTO;
+    }
+
     public getCanal(): string | null {
         return this.canal;
     }

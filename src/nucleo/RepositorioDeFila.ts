@@ -5,6 +5,11 @@ import type { Ticket } from "./entidades/Ticket.js";
  * Erros possíveis: ver ErrosDaFila.ts.
  */
 export interface RepositorioDeFila {
+  /** Cria o ticket e o estado da conversa atomicamente; reutiliza a transferência existente. */
+  enfileirar(conversaId: number): Promise<Ticket>;
+
+  buscarPorConversa(conversaId: number): Promise<Ticket | null>;
+
   /**
    * Somente tickets AGUARDANDO, ordenados por prioridade (URGENTE, ALTA, MEDIA, BAIXA) e,
    * dentro dela, pela data de abertura (quem espera há mais tempo primeiro).
