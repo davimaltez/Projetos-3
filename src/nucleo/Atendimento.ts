@@ -1,11 +1,13 @@
 import type { CanalMensagens, MensagemRecebida } from "./CanalMensagens.js";
 import type { ClassificadorDeIntencao } from "./ClassificadorDeIntencao.js";
+import type { GeradorDeResposta, TrocaDeConversa } from "./GeradorDeResposta.js";
 import type { LimitadorDeTaxa } from "./LimitadorDeTaxa.js";
-import type { Menu } from "./Menu.js";
+import type { Menu, Selecao } from "./Menu.js";
 import type { ServicoDeFila } from "./ServicoDeFila.js";
 import { StatusTicket } from "./entidades/Enums.js";
 import { mascararRemetente, resumirTextoParaLog } from "./PrivacidadeDeLog.js";
 import type {
+  EstadoDoMenu,
   RepositorioDeClientes,
   RepositorioDeContextoDoMenu,
   RepositorioDeConversas,
@@ -17,10 +19,14 @@ import { TOPICOS, topicosAtivos, type Topico } from "./Topicos.js";
 /** Como a decisão foi tomada. Vai para eventos.origem e explica cada resposta no relatório. */
 type OrigemDecisao =
   | "menu" // usuário digitou o número de uma opção
+  | "menu_texto" // usuário escreveu algo que corresponde a uma opção do nível (sem IA)
   | "menu_invalido" // digitou um número que não é opção → menu de novo, sem IA
   | "ia" // IA classificou com confiança suficiente
   | "ia_incerta" // IA respondeu, mas indefinido ou confiança baixa → menu
   | "ia_falhou" // erro, timeout ou resposta inválida → menu
+  | "ia_gerada" // modo pergunta: a IA escreveu a resposta com base no manual
+  | "ia_sem_resposta" // modo pergunta: o manual não cobre → frase fixa
+  | "ia_gerada_falhou" // modo pergunta: erro ou timeout do gerador → frase fixa
   | "sem_ia"; // nenhuma chave configurada → sempre menu
 
 interface Decisao {
@@ -32,10 +38,14 @@ interface Decisao {
   texto: string | null;
   /** Nível do menu depois desta resposta (ids do topo até o nível atual). [] = menu principal. */
   caminhoMenu: string[];
+  /** true = o cliente está no modo "escreva sua pergunta": o próximo texto vai para o gerador. */
+  perguntando: boolean;
+  /** Últimas perguntas e respostas do modo pergunta (vazio fora dele). */
+  historico: readonly TrocaDeConversa[];
 }
 
-/** Valores das decisões que não passaram pela IA. */
-const SEM_IA = { confianca: null, latenciaIaMs: null } as const;
+/** Valores das decisões sem IA e fora do modo pergunta. */
+const PADRAO = { confianca: null, latenciaIaMs: null, perguntando: false, historico: [] } as const;
 
 /** Ajustes do atendimento, montados no app.ts. */
 export interface OpcoesDeAtendimento {
@@ -57,15 +67,26 @@ const TEXTO_DE_INSTABILIDADE = "Estamos com instabilidade. Tente de novo em algu
 /** Enviado (no máximo 1 vez por minuto) a quem passou do limite de mensagens. */
 const TEXTO_DE_EXCESSO = "Recebi muitas mensagens em pouco tempo. Aguarde um momento e tente de novo.";
 
+// Modo "escreva sua pergunta" (história 1.5). Frases fixas: o que a IA não cobre, o grupo escreve.
+const TEXTO_NAO_ENCONTRADO = "Não encontrei essa informação no nosso manual. Tente escrever de outro jeito.";
+const TEXTO_FALHA_GERADOR = "Não consegui responder agora. Tente de novo em instantes.";
+const TEXTO_SEM_GERADOR = "No momento não consigo responder perguntas escritas. Escolha uma das opções do menu.";
+const RODAPE_PERGUNTA = "Pode escrever outra dúvida ou digitar 0 para voltar ao menu.";
+/** Quantas trocas o gerador enxerga, para entender "e se der erro de novo?". */
+const MAX_TROCAS = 3;
+
 /**
  * Regra de atendimento. Não sabe o que é Baileys, Gemini nem Postgres: conversa com
  * um CanalMensagens, com os repositórios (interfaces de Repositorios.ts) e, se houver, com
- * um ClassificadorDeIntencao. Tudo chega pelo construtor, inclusive o Menu.
+ * um ClassificadorDeIntencao e um GeradorDeResposta. Tudo chega pelo construtor, inclusive o Menu.
  *
  * Ordem de decisão (da mais barata para a mais cara):
+ *   0. pedido de atendente humano ("atendente", "humano"): vale em qualquer ponto
+ *   0. no modo pergunta: 0/"menu" sai; texto vai para o gerador (que consulta o manual)
  *   1. número do menu → tópico direto ou sub-menu, sem IA
- *   2. IA classifica → se confiante, segue o caminho do tópico
- *   3. qualquer dúvida ou falha → menu (história 1.2: "em vez de adivinhar")
+ *   2. texto que corresponde a UMA opção do nível atual → opção direta, sem IA
+ *   3. IA escolhe entre as opções do nível atual (na raiz, entre os tópicos principais)
+ *   4. qualquer dúvida ou falha → menu do nível atual (história 1.2: "em vez de adivinhar")
  */
 export class Atendimento {
   /** Mensagens sendo processadas agora (por idExterno). Ver processar(). */
@@ -80,6 +101,7 @@ export class Atendimento {
     private readonly eventos: RepositorioDeEventos,
     private readonly contextoMenu: RepositorioDeContextoDoMenu,
     private readonly classificador: ClassificadorDeIntencao | null,
+    private readonly gerador: GeradorDeResposta | null,
     private readonly menu: Menu,
     private readonly opcoes: OpcoesDeAtendimento,
     private readonly fila: ServicoDeFila
@@ -113,11 +135,12 @@ export class Atendimento {
     if (registro === null) return; // já processada (respondida e gravada): não responder de novo
     const { conversaId, entradaId } = registro;
 
-    const caminhoAnterior = await this.caminhoAtual(conversaId);
+    // História 1.1: em que nível do menu o cliente está e se está no modo pergunta.
+    const estadoAnterior = await this.estadoAtual(conversaId);
     const humano = await this.operarFila(mensagem, () => this.fila.obterAtendimentoHumano(conversaId));
     // Durante a espera/atendimento, registra novas entradas para o operador, sem menu ou IA.
     // Um pedido explícito repetido recebe o mesmo protocolo, inclusive após falha de envio.
-    if (humano && !this.pedidoExplicitoDeHumano(mensagem.texto, caminhoAnterior)) {
+    if (humano && !this.pedidoExplicitoDeHumano(mensagem.texto, estadoAnterior.caminho)) {
       await this.mensagens.marcarProcessada(entradaId);
       return;
     }
@@ -125,8 +148,7 @@ export class Atendimento {
     // História 1.6: "digitando..." desde o início do processamento, inclusive enquanto a IA pensa.
     await this.canal.indicarDigitando(mensagem.enderecoResposta);
 
-    // História 1.1: em que nível do menu o cliente está (vazio = menu principal).
-    const decisao = await this.decidir(mensagem.texto, caminhoAnterior);
+    const decisao = await this.decidir(mensagem.texto, estadoAnterior);
     const ticket = decisao.topico?.id === "atendimento_humano"
       ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId)) : null;
     const resposta = ticket
@@ -146,9 +168,13 @@ export class Atendimento {
     // próxima entrega desta mesma mensagem é reprocessada (ver registrarEntrada). Custo aceito: se a
     // queda vier DEPOIS do envio, a resposta pode sair repetida; em troca, ninguém fica sem resposta.
     const saidaId = await this.canal.enviarTexto(mensagem.enderecoResposta, resposta);
-    // O nível do menu só é gravado depois do envio: se o envio falhar, a mensagem é reprocessada
-    // a partir do nível ANTERIOR, em vez de navegar duas vezes.
-    await this.guardarCaminho(conversaId, caminhoAnterior, decisao.caminhoMenu);
+    // O estado do menu só é gravado depois do envio: se o envio falhar, a mensagem é reprocessada
+    // a partir do estado ANTERIOR, em vez de navegar duas vezes.
+    await this.guardarEstado(conversaId, estadoAnterior, {
+      caminho: decisao.caminhoMenu,
+      perguntando: decisao.perguntando,
+      historico: decisao.historico,
+    });
     await this.mensagens.registrarSaida(conversaId, saidaId, resposta);
     await this.eventos.registrar({
       conversaId,
@@ -162,7 +188,9 @@ export class Atendimento {
         confianca: decisao.confianca,
         latenciaIaMs: decisao.latenciaIaMs,
         classificador: this.classificador?.nome ?? null,
+        gerador: this.gerador?.nome ?? null,
         caminhoMenu: decisao.caminhoMenu, // nível do menu depois desta resposta
+        perguntando: decisao.perguntando, // true = continua no modo pergunta
       },
     });
     await this.mensagens.marcarProcessada(entradaId);
@@ -213,36 +241,124 @@ export class Atendimento {
     }
   }
 
-  /** Texto específico da decisão (sub-menu, folha), senão a resposta do tópico, senão o menu. */
+  /** Texto específico da decisão (sub-menu, folha, resposta gerada), senão a resposta do tópico, senão o menu. */
   private textoDaResposta(decisao: Decisao): string {
     if (decisao.texto !== null) return decisao.texto;
     if (decisao.topico) return decisao.topico.respostaProvisoria;
     return this.menu.texto();
   }
 
-  private async decidir(texto: string, caminhoMenu: readonly string[]): Promise<Decisao> {
-    if (this.comandoDeHumano(texto)) {
-      return { ...SEM_IA, topico: TOPICOS.find((t) => t.id === "atendimento_humano")!,
-        origem: "menu", texto: null, caminhoMenu: [] };
+  private async decidir(texto: string, estado: EstadoDoMenu): Promise<Decisao> {
+    // 0a) Pedido explícito de atendente ("atendente", "humano", "falar com uma pessoa"):
+    //     vale em qualquer ponto, inclusive dentro do modo pergunta. O ticket é criado no atender().
+    const topicoHumano = TOPICOS.find((t) => t.id === "atendimento_humano");
+    if (topicoHumano && this.comandoDeHumano(texto)) {
+      return { ...PADRAO, topico: topicoHumano, origem: "menu", texto: null, caminhoMenu: [] };
     }
+
+    // Caminho que não existe mais (o menu mudou depois do deploy) vira o menu principal.
+    const caminho = this.menu.normalizarCaminho(estado.caminho);
+
+    // 0b) Modo "escreva sua pergunta": 0 ou "menu" saem; texto vai para o gerador.
+    //     Qualquer outro número sai do modo e vale como opção do menu (segue abaixo).
+    if (estado.perguntando && this.gerador && caminho.length > 0) {
+      const numero = this.menu.lerNumero(texto);
+      if (numero === 0 || this.menu.ehPedidoDeVoltar(texto)) return this.mostrarNivel("menu", caminho);
+      if (numero === null) return this.gerarResposta(texto, caminho, estado.historico, this.gerador);
+    }
+
     // 1) Número: NUNCA chama a IA. Vale para o nível do menu em que o cliente está.
-    const leitura = this.menu.interpretar(texto, caminhoMenu);
-    if (leitura.tipo === "opcao") {
-      return { ...SEM_IA, topico: leitura.topico, origem: "menu", texto: leitura.texto, caminhoMenu: [] };
-    }
-    if (leitura.tipo === "navegacao") {
-      return { ...SEM_IA, topico: leitura.topico, origem: "menu", texto: leitura.texto, caminhoMenu: leitura.novoCaminho };
-    }
+    const leitura = this.menu.interpretar(texto, caminho);
     if (leitura.tipo === "invalida") {
-      return { ...SEM_IA, topico: null, origem: "menu_invalido", texto: leitura.texto, caminhoMenu: leitura.novoCaminho };
+      return { ...PADRAO, topico: null, origem: "menu_invalido", texto: leitura.texto, caminhoMenu: leitura.novoCaminho };
     }
+    if (leitura.tipo !== "livre") return this.decisaoDeSelecao(leitura, "menu");
 
-    // 2) Texto livre: o cliente sai de qualquer sub-menu (caminhoMenu: []) e segue o fluxo da IA.
-    if (!this.classificador) return { ...SEM_IA, topico: null, origem: "sem_ia", texto: null, caminhoMenu: [] };
+    // 2) Texto que corresponde a UMA opção do nível atual: também sem IA.
+    const porTexto = this.menu.buscarPorTexto(texto, caminho);
+    if (porTexto) return this.decisaoDeSelecao(porTexto, "menu_texto");
 
+    // 3) Sem IA configurada: mostra o menu do nível atual.
+    if (!this.classificador) return this.mostrarNivel("sem_ia", caminho);
+
+    // 4) IA. Na raiz escolhe entre os tópicos principais; num sub-menu, só entre as opções daquele nível.
+    return caminho.length === 0
+      ? this.classificarTopico(texto, this.classificador)
+      : this.classificarNoNivel(texto, caminho, this.classificador);
+  }
+
+  /** Opção escolhida (por número, texto ou IA): vira a decisão com o texto e o novo estado do menu. */
+  private decisaoDeSelecao(selecao: Selecao, origem: OrigemDecisao): Decisao {
+    if (selecao.tipo === "perguntar") {
+      // Sem gerador (sem chave ou sem manual), a opção avisa em vez de prender o cliente num modo mudo.
+      if (!this.gerador) {
+        return {
+          ...this.mostrarNivel(origem, selecao.novoCaminho),
+          texto: `${TEXTO_SEM_GERADOR}\n\n${this.menu.texto(selecao.novoCaminho)}`,
+        };
+      }
+      return { ...PADRAO, topico: selecao.topico, origem, texto: selecao.texto, caminhoMenu: selecao.novoCaminho, perguntando: true };
+    }
+    return {
+      ...PADRAO,
+      topico: selecao.topico,
+      origem,
+      texto: selecao.texto,
+      caminhoMenu: selecao.tipo === "navegacao" ? selecao.novoCaminho : [],
+    };
+  }
+
+  /** Sem escolha: mostra o menu do nível em que o cliente está, sem tirá-lo dele. */
+  private mostrarNivel(origem: OrigemDecisao, caminho: readonly string[]): Decisao {
+    return { ...PADRAO, topico: null, origem, texto: this.menu.texto(caminho), caminhoMenu: [...caminho] };
+  }
+
+  /** Modo pergunta: o gerador responde com base no manual. Nunca lança: falha vira frase fixa. */
+  private async gerarResposta(
+    texto: string,
+    caminho: readonly string[],
+    historico: readonly TrocaDeConversa[],
+    gerador: GeradorDeResposta
+  ): Promise<Decisao> {
+    const base = {
+      ...PADRAO,
+      topico: this.menu.topicoDoCaminho(caminho),
+      caminhoMenu: [...caminho],
+      perguntando: true, // continua no modo até o cliente digitar 0
+      historico,
+    };
     const inicio = Date.now();
     try {
-      const { topico, confianca } = await this.classificador.classificar(texto, topicosAtivos());
+      const { encontrou, texto: resposta } = await gerador.gerar(texto, historico);
+      const latenciaIaMs = Date.now() - inicio;
+
+      if (encontrou) {
+        const troca = { cliente: texto.slice(0, 300), resposta: resposta.slice(0, 600) };
+        return {
+          ...base,
+          origem: "ia_gerada",
+          latenciaIaMs,
+          texto: `${resposta}\n\n${RODAPE_PERGUNTA}`,
+          historico: [...historico, troca].slice(-MAX_TROCAS),
+        };
+      }
+      return { ...base, origem: "ia_sem_resposta", latenciaIaMs, texto: `${TEXTO_NAO_ENCONTRADO}\n\n${RODAPE_PERGUNTA}` };
+    } catch (erro) {
+      console.error("[atendimento] gerador falhou:", erro instanceof Error ? erro.message : erro);
+      return {
+        ...base,
+        origem: "ia_gerada_falhou",
+        latenciaIaMs: Date.now() - inicio,
+        texto: `${TEXTO_FALHA_GERADOR}\n\n${RODAPE_PERGUNTA}`,
+      };
+    }
+  }
+
+  /** Menu principal: a IA escolhe entre os tópicos principais. */
+  private async classificarTopico(texto: string, classificador: ClassificadorDeIntencao): Promise<Decisao> {
+    const inicio = Date.now();
+    try {
+      const { topico, confianca } = await classificador.classificar(texto, topicosAtivos());
       const latenciaIaMs = Date.now() - inicio;
       const encontrado = TOPICOS.find((t) => t.id === topico && t.ativo) ?? null;
 
@@ -250,6 +366,7 @@ export class Atendimento {
         // Tópico com sub-menu: abre o sub-menu em vez de mandar o texto provisório.
         const submenu = this.menu.abrirTopico(encontrado);
         return {
+          ...PADRAO,
           topico: encontrado,
           origem: "ia",
           confianca,
@@ -258,18 +375,45 @@ export class Atendimento {
           caminhoMenu: submenu?.novoCaminho ?? [],
         };
       }
-      return { topico: null, origem: "ia_incerta", confianca, latenciaIaMs, texto: null, caminhoMenu: [] };
+      return { ...this.mostrarNivel("ia_incerta", []), confianca, latenciaIaMs };
     } catch (erro) {
       // Degrada para o menu em vez de deixar o cliente sem resposta.
       console.error("[atendimento] classificador falhou, exibindo menu:", erro instanceof Error ? erro.message : erro);
-      return { topico: null, origem: "ia_falhou", confianca: null, latenciaIaMs: Date.now() - inicio, texto: null, caminhoMenu: [] };
+      return { ...this.mostrarNivel("ia_falhou", []), latenciaIaMs: Date.now() - inicio };
     }
   }
 
+  /** Sub-menu: a IA escolhe só entre as opções do nível atual. Dúvida ou falha repete o nível. */
+  private async classificarNoNivel(
+    texto: string,
+    caminho: readonly string[],
+    classificador: ClassificadorDeIntencao
+  ): Promise<Decisao> {
+    const inicio = Date.now();
+    try {
+      const { id, confianca } = await classificador.escolherOpcao(texto, this.menu.opcoesDoNivel(caminho));
+      const latenciaIaMs = Date.now() - inicio;
+      const selecao = id !== null && confianca >= this.opcoes.confiancaMinima ? this.menu.escolher(caminho, id) : null;
+
+      // O cliente já escreveu a dúvida e a IA mandou para "Outra dúvida": responde agora, sem pedir de novo.
+      if (selecao?.tipo === "perguntar" && this.gerador) {
+        const resposta = await this.gerarResposta(texto, selecao.novoCaminho, [], this.gerador);
+        return { ...resposta, confianca, latenciaIaMs: latenciaIaMs + (resposta.latenciaIaMs ?? 0) };
+      }
+      if (selecao) return { ...this.decisaoDeSelecao(selecao, "ia"), confianca, latenciaIaMs };
+      return { ...this.mostrarNivel("ia_incerta", caminho), confianca, latenciaIaMs };
+    } catch (erro) {
+      console.error("[atendimento] classificador falhou, exibindo o menu do nível:", erro instanceof Error ? erro.message : erro);
+      return { ...this.mostrarNivel("ia_falhou", caminho), latenciaIaMs: Date.now() - inicio };
+    }
+  }
+
+  /** "atendente", "humano", "pessoa" ou "falar com um(a) atendente/humano/pessoa", escritos sozinhos. */
   private comandoDeHumano(texto: string): boolean {
     return /^(?:falar com (?:um |uma )?)?(?:atendente|humano|pessoa)[.!?]?$/.test(texto.trim().toLowerCase());
   }
 
+  /** Operação na fila: se o banco falhar, o cliente é avisado (no máximo 1 vez por minuto) e o erro segue adiante. */
   private async operarFila<T>(mensagem: MensagemRecebida, operacao: () => Promise<T>): Promise<T> {
     try {
       return await operacao();
@@ -285,22 +429,31 @@ export class Atendimento {
     return leitura.tipo === "opcao" && leitura.topico.id === "atendimento_humano";
   }
 
-  /** Nível atual do menu. Se o banco falhar aqui, o cliente cai no menu principal (nunca fica sem resposta). */
-  private async caminhoAtual(conversaId: number): Promise<string[]> {
+  /** Estado atual do menu. Se o banco falhar aqui, o cliente cai no menu principal (nunca fica sem resposta). */
+  private async estadoAtual(conversaId: number): Promise<EstadoDoMenu> {
     try {
-      return await this.contextoMenu.obterCaminho(conversaId);
+      return await this.contextoMenu.obter(conversaId);
     } catch {
-      return [];
+      return { caminho: [], perguntando: false, historico: [] };
     }
   }
 
-  /** Grava o novo nível só se mudou. Falha aqui não impede a resposta nem a gravação da saída. */
-  private async guardarCaminho(conversaId: number, anterior: readonly string[], novo: readonly string[]): Promise<void> {
-    if (anterior.length === novo.length && anterior.every((id, i) => id === novo[i])) return;
+  /**
+   * Grava o novo estado só se mudou. No modo pergunta grava sempre: isso renova a validade
+   * (10 minutos) a cada pergunta. Falha aqui não impede a resposta nem a gravação da saída.
+   */
+  private async guardarEstado(conversaId: number, anterior: EstadoDoMenu, novo: EstadoDoMenu): Promise<void> {
+    const igual =
+      anterior.perguntando === novo.perguntando &&
+      anterior.historico.length === novo.historico.length &&
+      anterior.caminho.length === novo.caminho.length &&
+      anterior.caminho.every((id, i) => id === novo.caminho[i]);
+    if (igual && !novo.perguntando) return;
+
     try {
-      await this.contextoMenu.salvarCaminho(conversaId, novo);
+      await this.contextoMenu.salvar(conversaId, novo);
     } catch (erro) {
-      console.warn("[atendimento] não consegui salvar o nível do menu:", erro instanceof Error ? erro.message : erro);
+      console.warn("[atendimento] não consegui salvar o estado do menu:", erro instanceof Error ? erro.message : erro);
     }
   }
 }

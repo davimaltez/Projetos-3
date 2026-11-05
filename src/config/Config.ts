@@ -24,6 +24,13 @@ export class Config {
   readonly iaConfiancaMinima: number;
   /** Mensagens aceitas por minuto de cada remetente; 0 = sem limite. */
   readonly limiteMensagensPorMinuto: number;
+
+    /** Arquivo de texto com o manual que o gerador de respostas consulta. */
+  readonly manualCaminho: string;
+  /** Modelo do gerador. Por padrão, o mesmo da classificação. */
+  readonly geradorModelo: string;
+  readonly geradorTimeoutMs: number;
+
   readonly digitandoMinimoMs: number;
   readonly digitandoMaximoMs: number;
   readonly operadoresHttpJson: string;
@@ -44,6 +51,9 @@ export class Config {
     this.geminiTimeoutMs = Config.numero(env, "GEMINI_TIMEOUT_MS", 8_000, { minimo: 1, inteiro: true });
     this.iaConfiancaMinima = Config.numero(env, "IA_CONFIANCA_MINIMA", 0.6, { minimo: 0, maximo: 1 });
     this.limiteMensagensPorMinuto = Config.numero(env, "LIMITE_MENSAGENS_POR_MINUTO", 10, { minimo: 0, inteiro: true });
+    this.manualCaminho = env.MANUAL_CAMINHO?.trim() || "./manual/manual.md";
+    this.geradorModelo = env.GERADOR_MODELO?.trim() || this.geminiModelo;
+    this.geradorTimeoutMs = Config.numero(env, "GERADOR_TIMEOUT_MS", 15_000, { minimo: 1, inteiro: true });
   }
 
   static carregar(env: NodeJS.ProcessEnv = process.env): Config {
