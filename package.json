@@ -16,7 +16,8 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "db:up": "docker compose up -d",
     "db:migrate": "tsx src/scripts/migrarBanco.ts",
-    "db:reset": "docker compose down -v && docker compose up -d"
+    "db:reset": "docker compose down -v && docker compose up -d",
+    "resumo": "tsx gerar-resumo.ts"
   },
   "dependencies": {
     "@google/genai": "^2.24.0",

@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS conversas (
   estado TEXT NOT NULL DEFAULT 'BOT',
   fluxo TEXT,
   contexto JSONB NOT NULL DEFAULT '{}',
-  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Conversa.dataCriacao (plano da Dupla 2). Bancos existentes: migração 002.
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS mensagens (
@@ -63,31 +65,64 @@ CREATE TABLE IF NOT EXISTS administradores (
   ativo BOOLEAN NOT NULL DEFAULT true
 );
 
--- Atualização aditiva para bancos já existentes; não exige db:reset.
-ALTER TABLE conversas ADD COLUMN IF NOT EXISTS iniciada_em TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Etapa 3: fila humana. Este bloco é para instalação nova; bancos existentes
+-- devem usar db/migrations/001_fila_atendimento_humano.sql e depois
+-- db/migrations/002_fila_conforme_plano.sql (ver docs/migracao-fila.md).
+BEGIN;
+SET LOCAL search_path = public, pg_catalog;
 
-CREATE TABLE IF NOT EXISTS atendentes (
-  id INT PRIMARY KEY,
+-- Identidade fornecida pela aplicação; não gera outro ID para um Atendente existente.
+CREATE TABLE atendentes (
+  id INTEGER CONSTRAINT atendentes_pkey PRIMARY KEY,
   nome TEXT NOT NULL,
-  email TEXT NOT NULL
+  email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OFFLINE',
+  especialidade TEXT,
+  CONSTRAINT atendentes_status_check
+    CHECK (status IN ('DISPONIVEL', 'OCUPADO', 'OFFLINE'))
 );
 
-CREATE TABLE IF NOT EXISTS tickets (
-  protocolo TEXT PRIMARY KEY,
-  conversa_id INT NOT NULL REFERENCES conversas(id),
+CREATE TABLE tickets (
+  -- O id do ticket é o protocolo mostrado ao cliente.
+  id TEXT CONSTRAINT tickets_pkey PRIMARY KEY,
+  conversa_id INTEGER NOT NULL,
+  atendente_id INTEGER,
   assunto TEXT NOT NULL,
-  prioridade TEXT NOT NULL CHECK (prioridade IN ('ALTA', 'MEDIA', 'BAIXA')),
-  status TEXT NOT NULL DEFAULT 'AGUARDANDO'
-    CHECK (status IN ('AGUARDANDO', 'EM_ATENDIMENTO', 'ENCERRADO')),
-  aberto_em TIMESTAMPTZ NOT NULL DEFAULT now(),
-  fechado_em TIMESTAMPTZ,
+  prioridade TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'AGUARDANDO',
+  data_abertura TIMESTAMPTZ NOT NULL,
+  data_fechamento TIMESTAMPTZ,
   resumo_bot TEXT NOT NULL,
-  atendente_id INT REFERENCES atendentes(id),
-  CHECK ((status = 'AGUARDANDO' AND atendente_id IS NULL AND fechado_em IS NULL)
-      OR (status = 'EM_ATENDIMENTO' AND atendente_id IS NOT NULL AND fechado_em IS NULL)
-      OR (status = 'ENCERRADO' AND atendente_id IS NOT NULL AND fechado_em IS NOT NULL))
+  CONSTRAINT tickets_conversa_unique UNIQUE (conversa_id),
+  CONSTRAINT tickets_conversa_fk
+    FOREIGN KEY (conversa_id) REFERENCES conversas(id) ON DELETE RESTRICT,
+  CONSTRAINT tickets_atendente_fk
+    FOREIGN KEY (atendente_id) REFERENCES atendentes(id) ON DELETE RESTRICT,
+  CONSTRAINT tickets_prioridade_check
+    CHECK (prioridade IN ('URGENTE', 'ALTA', 'MEDIA', 'BAIXA')),
+  CONSTRAINT tickets_status_check
+    CHECK (status IN ('AGUARDANDO', 'EM_ATENDIMENTO', 'ENCERRADO')),
+  CONSTRAINT tickets_estado_check CHECK (
+    (status = 'AGUARDANDO' AND atendente_id IS NULL AND data_fechamento IS NULL)
+    OR
+    (status = 'EM_ATENDIMENTO' AND atendente_id IS NOT NULL AND data_fechamento IS NULL)
+    OR
+    (status = 'ENCERRADO' AND atendente_id IS NOT NULL AND data_fechamento IS NOT NULL)
+  )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ticket_aberto_conversa ON tickets (conversa_id)
-  WHERE status <> 'ENCERRADO';
-CREATE INDEX IF NOT EXISTS idx_ticket_fila ON tickets (status, prioridade, aberto_em);
+-- UNIQUE(conversa_id) já cria o índice desse relacionamento.
+CREATE INDEX idx_tickets_atendente ON tickets (atendente_id);
+
+-- A ordem da fila não é alfabética: URGENTE, ALTA, MEDIA, BAIXA.
+-- Mesma expressão usada pelo RepositorioDeFilaPg.listarAguardando().
+CREATE INDEX idx_tickets_fila ON tickets (
+  (CASE prioridade WHEN 'URGENTE' THEN 0 WHEN 'ALTA' THEN 1 WHEN 'MEDIA' THEN 2 ELSE 3 END),
+  data_abertura,
+  id
+) WHERE status = 'AGUARDANDO';
+
+CREATE INDEX idx_mensagens_conversa_historico
+  ON mensagens (conversa_id, criado_em, id);
+
+COMMIT;

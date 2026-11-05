@@ -20,7 +20,8 @@ import { ConversaRepositorio } from "../ConversaRepositorio.js";
 import { ContextoMenuRepositorio } from "../ContextoMenuRepositorio.js";
 import { EventoRepositorio } from "../EventoRepositorio.js";
 import { MensagemRepositorio } from "../MensagemRepositorio.js";
-import { RepositorioDeFilaPostgres } from "../RepositorioDeFilaPostgres.js";
+import { AtendenteRepositorio } from "../AtendenteRepositorio.js";
+import { RepositorioDeFilaPg } from "../RepositorioDeFilaPg.js";
 
 // Opt-in explícito. Não carrega .env nem usa DATABASE_URL ou sessão de WhatsApp.
 const url = process.env.FILA_TEST_DATABASE_URL;
@@ -45,7 +46,7 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
   const clientes = new ClienteRepositorio(pool);
   const conversas = new ConversaRepositorio(pool);
   const mensagens = new MensagemRepositorio(pool);
-  const fila = new ServicoDeFila(new RepositorioDeFilaPostgres(pool));
+  const fila = new ServicoDeFila(new RepositorioDeFilaPg(pool));
   const canal = new CanalSimulado();
   const atendimento = new Atendimento(canal, clientes, conversas, mensagens, new EventoRepositorio(pool),
     new ContextoMenuRepositorio(pool), null, new Menu(topicosDoMenu()), {
@@ -57,7 +58,7 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
   });
 
   await t.test("schema atualiza uma instalação anterior e pode ser reaplicado sem perder dados", async () => {
-    await pool.query(sql.split("-- Atualização aditiva")[0]);
+    await pool.query(sql.split("-- Etapa 3:")[0].replace(/,\s*-- Conversa.dataCriacao[\s\S]*?criado_em TIMESTAMPTZ NOT NULL DEFAULT now\(\)/, ""));
     const clienteId = await clientes.obterOuCriar("cliente-de-integracao", "simulado");
     conversaId = await conversas.obterOuCriarAtual(clienteId);
     await mensagens.registrarEntrada(conversaId, "antiga", "Mensagem anterior à migração");
@@ -87,20 +88,20 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
     const [ticket] = await fila.listarFila();
     assert.ok(ticket);
     protocolo = ticket.getProtocolo();
-    assert.equal(ticket.getConversa().getId(), conversaId);
+    assert.equal(ticket.getConversa().getId(), String(conversaId));
     assert.equal(ticket.getConversa().getStatus(), StatusConversa.AGUARDANDO_ATENDENTE);
     assert.ok(canal.enviadas.at(-1)?.texto.includes(protocolo));
     const historico = await fila.obterHistoricoDoTicket(protocolo);
-    assert.equal(historico[0].getConteudo(), "Mensagem anterior à migração");
-    const pedido = historico.find((m) => m.getConteudo() === "3")!;
+    assert.equal(historico[0].getTexto(), "Mensagem anterior à migração");
+    const pedido = historico.find((m) => m.getTexto() === "3")!;
     assert.equal(pedido.getIntencaoDetectada(), "atendimento_humano");
-    assert.equal(pedido.getRemetente().getIdentificacao(), "cliente-de-integracao");
+    assert.equal(pedido.getRemetente().getIdentificacao(), "cliente:1");
   });
 
   await t.test("reprocessamento e duas instâncias enfileirando preservam protocolo e evento único", async () => {
     const resultados = await Promise.all([
       fila.solicitarAtendimentoHumano(conversaId),
-      new ServicoDeFila(new RepositorioDeFilaPostgres(pool)).solicitarAtendimentoHumano(conversaId),
+      new ServicoDeFila(new RepositorioDeFilaPg(pool)).solicitarAtendimentoHumano(conversaId),
     ]);
     assert.ok(resultados.every((ticket) => ticket.getProtocolo() === protocolo));
     await enviar("3", "pedido");
@@ -114,8 +115,9 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
   let vencedor = 0;
   await t.test("nova instância lê a fila persistida e HTTP permite apenas uma assunção concorrente", async () => {
     outroPool = new pg.Pool(opcoes);
-    const novaFila = new ServicoDeFila(new RepositorioDeFilaPostgres(outroPool));
+    const novaFila = new ServicoDeFila(new RepositorioDeFilaPg(outroPool));
     assert.equal((await novaFila.listarFila())[0].getProtocolo(), protocolo);
+    await new AtendenteRepositorio(pool).cadastrar(tokens.map((_token, i) => new Atendente(i + 1, `Operador ${i + 1}`, `operador${i + 1}@example.com`)));
     http = new ServidorHttp(0, "127.0.0.1", canal, { verificar: async () => true }, false, novaFila,
       new AutenticadorDeOperador(JSON.stringify(tokens.map((token, i) => ({ id: i + 1,
         nome: `Operador ${i + 1}`, email: `operador${i + 1}@example.com`, token })))));
@@ -126,8 +128,8 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
     })));
     assert.deepEqual(disputas.map((r) => r.status).sort(), [200, 409]);
     vencedor = disputas.findIndex((r) => r.status === 200) + 1;
-    const ticket = await new RepositorioDeFilaPostgres(outroPool).obterPorId(protocolo);
-    assert.equal(ticket?.getAtendente()?.getId(), vencedor);
+    const ticket = await new RepositorioDeFilaPg(outroPool).buscarPorId(protocolo);
+    assert.equal(ticket?.getAtendente()?.getId(), String(vencedor));
     assert.equal(ticket?.getStatus(), StatusTicket.EM_ATENDIMENTO);
     assert.equal(ticket?.getConversa().getStatus(), StatusConversa.EM_ATENDIMENTO);
     assert.deepEqual(await novaFila.listarFila(), []);
@@ -164,25 +166,44 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
     await pool.query(`CREATE FUNCTION falhar_evento() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN RAISE EXCEPTION 'falha simulada de auditoria'; END $$;
       CREATE TRIGGER falha_evento BEFORE INSERT ON eventos FOR EACH ROW EXECUTE FUNCTION falhar_evento()`);
+    await new AtendenteRepositorio(pool).cadastrar([new Atendente(20, "Teste", "teste@example.com")]);
     try {
       await assert.rejects(fila.assumirTicket(ticket.getProtocolo(), new Atendente(20, "Teste", "teste@example.com")),
         /falha simulada de auditoria/);
-      const salvo = await new RepositorioDeFilaPostgres(pool).obterPorId(ticket.getProtocolo());
+      const salvo = await new RepositorioDeFilaPg(pool).buscarPorId(ticket.getProtocolo());
       assert.equal(salvo?.getStatus(), StatusTicket.AGUARDANDO);
       assert.equal(salvo?.getAtendente(), null);
       assert.equal(salvo?.getConversa().getStatus(), StatusConversa.AGUARDANDO_ATENDENTE);
-      assert.equal((await pool.query("SELECT count(*)::int AS total FROM atendentes WHERE id = 20")).rows[0].total, 0);
+      assert.equal((await pool.query("SELECT count(*)::int AS total FROM atendentes WHERE id = 20")).rows[0].total, 1);
     } finally { await pool.query("DROP TRIGGER falha_evento ON eventos; DROP FUNCTION falhar_evento()"); }
   });
 
   await t.test("ticket encerrado preserva datas e responsável e continua com histórico consultável", async () => {
     const data = new Date("2026-11-04T18:00:00Z");
-    await pool.query("UPDATE tickets SET status = 'ENCERRADO', fechado_em = $2 WHERE protocolo = $1", [protocolo, data]);
-    const repositorio = new RepositorioDeFilaPostgres(pool);
-    assert.equal(await repositorio.atribuirSeAguardando(protocolo, new Atendente(10, "Outro", "outro@example.com")), false);
-    const fechado = await repositorio.obterPorId(protocolo);
-    assert.equal(fechado?.getAtendente()?.getId(), vencedor);
+    await pool.query("UPDATE tickets SET status = 'ENCERRADO', data_fechamento = $2 WHERE id = $1", [protocolo, data]);
+    const repositorio = new RepositorioDeFilaPg(pool);
+    await assert.rejects(repositorio.atribuirAtendente(protocolo, "10"), /não está mais aguardando/);
+    const fechado = await repositorio.buscarPorId(protocolo);
+    assert.equal(fechado?.getAtendente()?.getId(), String(vencedor));
     assert.deepEqual(fechado?.getDataFechamento(), data);
+    assert.ok((await fila.obterHistoricoDoTicket(protocolo)).length > 0);
+  });
+
+  await t.test("pedidos concorrentes criam um único ticket e um único evento de transferência", async () => {
+    const clienteId = await clientes.obterOuCriar("cliente-criacao-concorrente", "simulado");
+    const id = await conversas.obterOuCriarAtual(clienteId);
+    const outraFila = new ServicoDeFila(new RepositorioDeFilaPg(outroPool!));
+    const tickets = await Promise.all([fila.solicitarAtendimentoHumano(id), outraFila.solicitarAtendimentoHumano(id)]);
+    assert.equal(tickets[0].getId(), tickets[1].getId());
+    assert.equal((await pool.query("SELECT count(*)::int AS total FROM tickets WHERE conversa_id = $1", [id])).rows[0].total, 1);
+    assert.equal((await pool.query("SELECT count(*)::int AS total FROM eventos WHERE conversa_id = $1 AND tipo = 'transferencia_humana'", [id])).rows[0].total, 1);
+  });
+
+  await t.test("cliente retorna após encerramento com uma conversa nova sem perder o histórico antigo", async () => {
+    const { rows } = await pool.query<{ cliente_id: number }>("UPDATE conversas SET estado = 'ENCERRADA' WHERE id = $1 RETURNING cliente_id", [conversaId]);
+    const novosIds = await Promise.all([conversas.obterOuCriarAtual(rows[0].cliente_id), conversas.obterOuCriarAtual(rows[0].cliente_id)]);
+    assert.notEqual(novosIds[0], conversaId);
+    assert.equal(novosIds[0], novosIds[1]);
     assert.ok((await fila.obterHistoricoDoTicket(protocolo)).length > 0);
   });
 });

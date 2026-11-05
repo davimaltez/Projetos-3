@@ -1,12 +1,17 @@
 
 import type { Atendente } from "./Atendente.js";
 import type { Conversa } from "./Conversa.js";
-import { Prioridade, StatusTicket } from "./Enums.js";
+import { PrioridadeTicket, StatusTicket } from "./Enums.js";
 
+/**
+ * Ticket de atendimento humano (plano da Dupla 2: id, conversa, atendente, status,
+ * prioridade, dataAbertura, getStatus, getPrioridade e atribuirAtendente).
+ * O id é o protocolo mostrado ao cliente (diagrama): getId() e getProtocolo() devolvem o mesmo valor.
+ */
 export class Ticket {
-    private protocolo: string;
+    private id: string;
     private assunto: string;
-    private prioridade: Prioridade;
+    private prioridade: PrioridadeTicket;
     private status: StatusTicket;
     private dataAbertura: Date;
     private dataFechamento: Date | null;
@@ -17,14 +22,14 @@ export class Ticket {
     private atendente: Atendente | null;
 
     constructor(
-        protocolo: string,
+        id: string,
         assunto: string,
-        prioridade: Prioridade,
+        prioridade: PrioridadeTicket,
         dataAbertura: Date,
         resumoBot: string,
         conversa: Conversa
     ) {
-        this.protocolo = protocolo;
+        this.id = id;
         this.assunto = assunto;
         this.prioridade = prioridade;
         this.status = StatusTicket.AGUARDANDO;
@@ -35,33 +40,62 @@ export class Ticket {
         this.atendente = null;
     }
 
-    public getProtocolo(): string {
-        return this.protocolo;
-    }
 
-    /** Carrega um ticket existente sem executar novamente atribuição ou fechamento. */
-    public static restaurar(dados: {
-        protocolo: string; assunto: string; prioridade: Prioridade; dataAbertura: Date;
-        resumoBot: string; conversa: Conversa; status: StatusTicket;
-        atendente: Atendente | null; dataFechamento: Date | null;
+    /** Restaura o registro sem atribuir/fechar novamente nem substituir datas históricas. */
+    public static reconstituir(dados: {
+        id: string;
+        assunto: string;
+        prioridade: PrioridadeTicket;
+        status: StatusTicket;
+        dataAbertura: Date;
+        dataFechamento: Date | null;
+        resumoBot: string;
+        conversa: Conversa;
+        atendente: Atendente | null;
     }): Ticket {
-        const ticket = new Ticket(dados.protocolo, dados.assunto, dados.prioridade,
+        const aguardando = dados.status === StatusTicket.AGUARDANDO
+            && dados.atendente === null && dados.dataFechamento === null;
+        const emAtendimento = dados.status === StatusTicket.EM_ATENDIMENTO
+            && dados.atendente !== null && dados.dataFechamento === null;
+        const encerrado = dados.status === StatusTicket.ENCERRADO
+            && dados.atendente !== null && dados.dataFechamento !== null;
+        if (!(aguardando || emAtendimento || encerrado)
+            || !Object.values(PrioridadeTicket).includes(dados.prioridade)) {
+            throw new Error("Estado do ticket persistido inconsistente.");
+        }
+        for (const data of [dados.dataAbertura, dados.dataFechamento]) {
+            if (data !== null && !Number.isFinite(data.getTime())) {
+                throw new Error("Data do ticket persistido inválida.");
+            }
+        }
+        const ticket = new Ticket(dados.id, dados.assunto, dados.prioridade,
             dados.dataAbertura, dados.resumoBot, dados.conversa);
         ticket.status = dados.status;
+        ticket.dataFechamento = dados.dataFechamento === null
+            ? null : new Date(dados.dataFechamento.getTime());
         ticket.atendente = dados.atendente;
-        ticket.dataFechamento = dados.dataFechamento === null ? null : new Date(dados.dataFechamento.getTime());
+        dados.conversa.vincularTicketReconstituido(ticket);
         return ticket;
+    }
+
+    public getId(): string {
+        return this.id;
+    }
+
+    /** Nome do diagrama para o mesmo identificador. */
+    public getProtocolo(): string {
+        return this.id;
     }
 
     public getAssunto(): string {
         return this.assunto;
     }
 
-    public getPrioridade(): Prioridade {
+    public getPrioridade(): PrioridadeTicket {
         return this.prioridade;
     }
 
-    public setPrioridade(p: Prioridade): void {
+    public setPrioridade(p: PrioridadeTicket): void {
         this.prioridade = p;
     }
 
@@ -91,7 +125,8 @@ export class Ticket {
         return this.atendente;
     }
 
-    public atribuir(a: Atendente): void {
+    /** Plano: atribui o atendente e muda o status para EM_ATENDIMENTO. */
+    public atribuirAtendente(atendente: Atendente): void {
         if (this.status !== StatusTicket.AGUARDANDO) {
             throw new Error(
                 "Este ticket nao esta aguardando atendimento."
@@ -99,7 +134,7 @@ export class Ticket {
         }
 
         this.conversa.iniciarAtendimento();
-        this.atendente = a;
+        this.atendente = atendente;
         this.status = StatusTicket.EM_ATENDIMENTO;
     }
 

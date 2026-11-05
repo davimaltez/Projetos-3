@@ -11,16 +11,16 @@ import { Atendente } from "../entidades/Atendente.js";
 import { Conversa } from "../entidades/Conversa.js";
 import { StatusConversa } from "../entidades/Enums.js";
 import { Mensagem } from "../entidades/Mensagem.js";
-import { Usuario } from "../entidades/Usuario.js";
+import { Cliente } from "../entidades/Cliente.js";
+import { Chatbot } from "../entidades/Chatbot.js";
 import { RepositorioDeFilaEmMemoria } from "../../repositorios/RepositorioDeFilaEmMemoria.js";
 import { CanalSimulado } from "./apoio/CanalSimulado.js";
 
-class ClienteSimulado extends Usuario {}
 function cenario(classificador: ClassificadorDeIntencao | null = null) {
-  const cliente = new ClienteSimulado(1, "Cliente", "cliente@example.com");
-  const bot = { getId: () => 0, getNome: () => "Bot", getIdentificacao: () => "bot" };
+  const cliente = new Cliente(1, "Cliente", "cliente@example.com", "5581999999999");
+  const bot = new Chatbot("wxn", "Bot", "simples", 2, true);
   const conversa = new Conversa(1, "simulado", cliente, bot);
-  const repositorio = new RepositorioDeFilaEmMemoria([], [conversa]);
+  const repositorio = new RepositorioDeFilaEmMemoria([], [new Atendente(2, "Operador", "operador@example.com")], [conversa]);
   const fila = new ServicoDeFila(repositorio);
   const canal = new CanalSimulado();
   const eventos: NovoEvento[] = [];
@@ -67,7 +67,7 @@ test("menu real oferece atendimento humano e a opção 3 cria ticket com histór
   assert.ok(ticket);
   assert.equal(c.conversa.getStatus(), StatusConversa.AGUARDANDO_ATENDENTE);
   assert.ok(c.canal.enviadas[1].texto.includes(ticket.getProtocolo()));
-  assert.deepEqual((await c.fila.obterHistoricoDoTicket(ticket.getProtocolo())).map((m) => m.getConteudo()),
+  assert.deepEqual((await c.fila.obterHistoricoDoTicket(ticket.getProtocolo())).map((m) => m.getTexto()),
     ["oi", c.canal.enviadas[0].texto, "3", c.canal.enviadas[1].texto]);
 });
 
@@ -103,7 +103,7 @@ test("mensagens na espera e após assunção são preservadas sem resposta autom
   assert.equal(c.canal.enviadas.length, 1);
   assert.equal(chamadas, 0);
   assert.ok([...c.entradas.values()].every((e) => e.processada));
-  assert.equal((await c.fila.obterHistoricoDoTicket(ticket.getProtocolo())).at(-1)?.getConteudo(), "Mais detalhes do problema");
+  assert.equal((await c.fila.obterHistoricoDoTicket(ticket.getProtocolo())).at(-1)?.getTexto(), "Mais detalhes do problema");
 });
 
 test("falha no envio permite reprocessar a transferência sem duplicar o ticket", async () => {

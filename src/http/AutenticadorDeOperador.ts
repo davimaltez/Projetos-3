@@ -27,6 +27,10 @@ export class AutenticadorDeOperador {
 
   get configurado(): boolean { return this.operadores.length > 0; }
 
+  listarAtendentes(): Atendente[] {
+    return this.operadores.map(({ atendente }) => new Atendente(atendente.getId(), atendente.getNome(), atendente.getEmail()));
+  }
+
   autenticar(autorizacao: string | undefined): Atendente | null {
     const token = /^Bearer (\S+)$/i.exec(autorizacao ?? "")?.[1];
     if (!token) return null;

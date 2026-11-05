@@ -16,7 +16,8 @@ import type { ClassificadorDeIntencao } from "./nucleo/ClassificadorDeIntencao.j
 import { ClassificadorGemini } from "./ia/ClassificadorGemini.js";
 import { ServidorHttp } from "./http/ServidorHttp.js";
 import { ContextoMenuRepositorio } from "./repositorios/ContextoMenuRepositorio.js";
-import { RepositorioDeFilaPostgres } from "./repositorios/RepositorioDeFilaPostgres.js";
+import { RepositorioDeFilaPg } from "./repositorios/RepositorioDeFilaPg.js";
+import { AtendenteRepositorio } from "./repositorios/AtendenteRepositorio.js";
 import { ServicoDeFila } from "./nucleo/ServicoDeFila.js";
 import { AutenticadorDeOperador } from "./http/AutenticadorDeOperador.js";
 
@@ -36,7 +37,7 @@ async function main(): Promise<void> {
     throw new Error("Postgres não respondeu. Rodou `npm run db:up`? DATABASE_URL está certa?");
   }
   try {
-    await banco.pool.query(`SELECT t.protocolo, c.iniciada_em FROM tickets t
+    await banco.pool.query(`SELECT t.id, c.criado_em FROM tickets t
       JOIN conversas c ON c.id = t.conversa_id LIMIT 0`);
   } catch {
     throw new Error("Estrutura da fila indisponível. Execute `npm run db:migrate` e confira o acesso ao banco.");
@@ -56,7 +57,8 @@ async function main(): Promise<void> {
       : "[app] GEMINI_API_KEY vazia: rodando sem IA, só com o menu"
   );
 
-  const fila = new ServicoDeFila(new RepositorioDeFilaPostgres(banco.pool));
+  await new AtendenteRepositorio(banco.pool).cadastrar(autenticador.listarAtendentes());
+  const fila = new ServicoDeFila(new RepositorioDeFilaPg(banco.pool));
   const atendimento = new Atendimento(
     canal,
     new ClienteRepositorio(banco.pool),

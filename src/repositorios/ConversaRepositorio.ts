@@ -4,15 +4,16 @@ import type { RepositorioDeConversas } from "../nucleo/Repositorios.js";
 export class ConversaRepositorio implements RepositorioDeConversas {
   constructor(private readonly pool: pg.Pool) {}
 
-  /** Esqueleto andante: uma conversa por cliente. Encerrar/reabrir vem na máquina de estados. */
+  /** Reutiliza a conversa aberta mais recente; após encerramento, cria uma nova. */
   async obterOuCriarAtual(clienteId: number): Promise<number> {
     const db = await this.pool.connect();
+    let descartar = false;
     try {
       await db.query("BEGIN");
       // Impede duas primeiras mensagens concorrentes de criarem conversas distintas.
       await db.query("SELECT id FROM clientes WHERE id = $1 FOR UPDATE", [clienteId]);
       const existente = await db.query<{ id: number }>(
-        "SELECT id FROM conversas WHERE cliente_id = $1 ORDER BY id DESC LIMIT 1",
+        "SELECT id FROM conversas WHERE cliente_id = $1 AND estado <> 'ENCERRADA' ORDER BY id DESC LIMIT 1",
         [clienteId]
       );
       if (existente.rows[0]) {
@@ -27,10 +28,10 @@ export class ConversaRepositorio implements RepositorioDeConversas {
       await db.query("COMMIT");
       return criada.rows[0].id;
     } catch (erro) {
-      await db.query("ROLLBACK");
+      try { await db.query("ROLLBACK"); } catch { descartar = true; }
       throw erro;
     } finally {
-      db.release();
+      db.release(descartar);
     }
   }
 }

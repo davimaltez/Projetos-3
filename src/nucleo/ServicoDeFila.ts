@@ -1,28 +1,13 @@
+import { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila.js";
+import { compararNaFila } from "./OrdemDaFila.js";
 import type { RepositorioDeFila } from "./RepositorioDeFila.js";
 import type { Atendente } from "./entidades/Atendente.js";
-import { Prioridade, StatusTicket } from "./entidades/Enums.js";
+import { StatusTicket } from "./entidades/Enums.js";
 import type { Mensagem } from "./entidades/Mensagem.js";
 import type { Ticket } from "./entidades/Ticket.js";
 
-const ORDEM_DE_PRIORIDADE: Record<Prioridade, number> = {
-  [Prioridade.ALTA]: 0,
-  [Prioridade.MEDIA]: 1,
-  [Prioridade.BAIXA]: 2,
-};
-
-export class TicketNaoEncontradoError extends Error {
-  constructor(ticketId: string) {
-    super(`Ticket não encontrado: ${ticketId}.`);
-    this.name = "TicketNaoEncontradoError";
-  }
-}
-
-export class TicketIndisponivelError extends Error {
-  constructor(ticketId: string) {
-    super(`O ticket ${ticketId} não está mais aguardando atendimento.`);
-    this.name = "TicketIndisponivelError";
-  }
-}
+// Mantém os imports antigos (`from "./ServicoDeFila.js"`) funcionando.
+export { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila.js";
 
 /** Regras da fila de atendimento humano; não depende de WhatsApp, IA ou PostgreSQL. */
 export class ServicoDeFila {
@@ -33,17 +18,17 @@ export class ServicoDeFila {
   }
 
   async obterAtendimentoHumano(conversaId: number): Promise<Ticket | null> {
-    return this.repositorio.obterAbertoPorConversa(conversaId);
+    const ticket = await this.repositorio.buscarPorConversa(conversaId);
+    return ticket?.getStatus() === StatusTicket.ENCERRADO ? null : ticket;
   }
 
+  /** Tickets aguardando, por prioridade e tempo de espera. */
   async listarFila(): Promise<Ticket[]> {
-    const tickets = await this.repositorio.listar();
+    const tickets = await this.repositorio.listarAguardando();
+    // O repositório já filtra e ordena; repetir aqui protege a regra contra uma implementação falha.
     return tickets
       .filter((ticket) => ticket.getStatus() === StatusTicket.AGUARDANDO)
-      .sort((a, b) =>
-        ORDEM_DE_PRIORIDADE[a.getPrioridade()] - ORDEM_DE_PRIORIDADE[b.getPrioridade()] ||
-        a.getDataAbertura().getTime() - b.getDataAbertura().getTime()
-      );
+      .sort(compararNaFila);
   }
 
   async assumirTicket(ticketId: string, atendente: Atendente): Promise<void> {
@@ -53,20 +38,18 @@ export class ServicoDeFila {
     }
 
     // Outra solicitação pode assumir o ticket depois da leitura acima.
-    // O repositório confirma o status no momento da atribuição.
-    if (!(await this.repositorio.atribuirSeAguardando(ticketId, atendente))) {
-      throw new TicketIndisponivelError(ticketId);
-    }
+    // O repositório confirma o status no momento da atribuição e lança TicketIndisponivelError.
+    await this.repositorio.atribuirAtendente(ticketId, atendente.getId());
   }
 
   async obterHistoricoDoTicket(ticketId: string): Promise<Mensagem[]> {
     const ticket = await this.exigirTicket(ticketId);
     return ticket.getConversa().getHistorico()
-      .sort((a, b) => a.getDataHora().getTime() - b.getDataHora().getTime());
+      .sort((a, b) => a.getDataEnvio().getTime() - b.getDataEnvio().getTime());
   }
 
   private async exigirTicket(ticketId: string): Promise<Ticket> {
-    const ticket = await this.repositorio.obterPorId(ticketId);
+    const ticket = await this.repositorio.buscarPorId(ticketId);
     if (ticket === null) throw new TicketNaoEncontradoError(ticketId);
     return ticket;
   }

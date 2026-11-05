@@ -1,7 +1,7 @@
 # Fila de atendimento humano
 
 O `ServicoDeFila` é criado em `src/app.ts` com um
-`RepositorioDeFilaPostgres`. A mesma instância é injetada no `Atendimento` e no
+`RepositorioDeFilaPg`. A mesma instância é injetada no `Atendimento` e no
 `ServidorHttp`: pedidos recebidos pelo WhatsApp geram tickets que o operador
 consegue listar, assumir e consultar por HTTP.
 
@@ -26,7 +26,7 @@ consegue listar, assumir e consultar por HTTP.
 Mensagens do mesmo remetente são processadas em sequência no processo para
 preservar a navegação do menu. O banco protege a criação e a assunção dos tickets
 entre instâncias diferentes. Prioridade e data de abertura determinam a ordem:
-`ALTA`, `MEDIA`, `BAIXA`, com os mais antigos primeiro dentro da prioridade.
+`URGENTE`, `ALTA`, `MEDIA`, `BAIXA`, com os mais antigos primeiro dentro da prioridade.
 
 ## Preparação do banco
 
@@ -38,10 +38,13 @@ já existente, execute:
 npm run db:migrate
 ```
 
-Esse comando executa `db/schema.sql` em uma transação e preserva os dados. Pode
-ser reaplicado. Cria `atendentes`, `tickets`, índices e a coluna
-`conversas.iniciada_em`. Conversas antigas recebem a data da migração nessa nova
-coluna, pois o schema anterior não registrava a data de início separadamente.
+Esse comando reconhece o estado do banco e usa `db/schema.sql` para instalação
+nova ou as migrações 001 e 002 para bancos legados. Pode ser reaplicado: bancos já
+atualizados pela equipe são apenas verificados. A migração 003 atende exclusivamente
+a primeira versão da branch `servico-de-fila`, preservando seus registros e
+adaptando os nomes das colunas ao padrão da equipe. Tudo ocorre em uma transação.
+Conversas antigas recebem `criado_em` a partir da primeira mensagem ou da última
+atualização; não se inventa uma nova data quando há histórico disponível.
 O comando não inicia WhatsApp, HTTP ou Gemini. Não é necessário usar `db:reset`.
 
 A aplicação verifica a estrutura da fila antes de conectar o WhatsApp e indica
@@ -53,6 +56,10 @@ Configure `OPERADORES_HTTP_JSON` no `.env` local como uma lista de operadores.
 Cada item possui `id` numérico positivo, `nome`, `email` e um `token` individual
 com pelo menos 32 caracteres sem espaços. IDs e tokens devem ser únicos.
 Gere tokens com `openssl rand -hex 32`; há um exemplo de formato em `.env.example`.
+
+Na inicialização, as identidades configuradas são cadastradas na tabela
+`atendentes`, preservando status e especialidade existentes. A atribuição exige
+esse cadastro, conforme o contrato adotado pela equipe.
 
 O token identifica o operador. O corpo da requisição não escolhe o responsável.
 As credenciais são comparadas por hash em tempo constante e não são devolvidas
@@ -87,9 +94,9 @@ credenciais; não foi criado um painel web.
 
 ## Persistência e concorrência
 
-A criação bloqueia a conversa e verifica se já existe um ticket aberto. Um índice
-único parcial também impede duplicação. Ticket, estado da conversa e evento de
-transferência são gravados na mesma transação. A assunção usa bloqueio da conversa
+A criação bloqueia a conversa e verifica se já existe um ticket aberto. A restrição
+`UNIQUE(conversa_id)` também impede duplicação, inclusive para tickets encerrados. Ticket, estado da conversa e evento de
+transferência são gravados na mesma transação. A assunção usa bloqueio do ticket
 e atualização condicional do ticket `AGUARDANDO`; estado e evento de assunção
 também são gravados na transação. Falhas desfazem todas essas mudanças.
 
@@ -99,7 +106,7 @@ atendimento. A consulta funciona após reiniciar o serviço. O resumo salvo na
 abertura não substitui o histórico completo.
 
 `RepositorioDeFilaEmMemoria` continua disponível para testes sem serviços
-externos. Recebe tickets e/ou conversas iniciais no construtor. Suas entidades
+externos. Recebe tickets, atendentes cadastrados e conversas iniciais no construtor. Suas entidades
 mantêm identidade; as listas são cópias.
 
 ## Validação
@@ -121,7 +128,10 @@ FILA_TEST_DATABASE_URL='postgresql://USUARIO:SENHA@localhost:PORTA/BANCO_TESTE' 
 O teste cria e remove apenas um schema aleatório próprio nesse banco. Valida
 migração sobre dados existentes, criação concorrente, persistência entre pools,
 assunção simultânea via HTTP, rollback e histórico após a transferência.
-Sem a variável, somente essa integração é pulada. Nunca usa `DATABASE_URL` como
+A suíte PostgreSQL da equipe usa `FILA_PG_TEST=1` e exige o banco
+`wxn_fila_teste` (parâmetros `FILA_PG_TEST_HOST`, `FILA_PG_TEST_PORT`,
+`FILA_PG_TEST_USER`, `FILA_PG_TEST_PASSWORD`, `FILA_PG_TEST_DATABASE`).
+Sem as variáveis, as respectivas integrações são puladas. Nunca usa `DATABASE_URL` como
 alternativa nem acessa uma sessão de WhatsApp.
 
 ## Limites desta integração
