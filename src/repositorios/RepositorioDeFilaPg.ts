@@ -2,11 +2,18 @@ import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { AtendenteNaoCadastradoError, TicketIndisponivelError, TicketNaoEncontradoError } from "../nucleo/ErrosDaFila.js";
 import type { RepositorioDeFila } from "../nucleo/RepositorioDeFila.js";
+import { PEDIDO_PADRAO, type PedidoDeAtendimento } from "../nucleo/PedidoDeAtendimento.js";
 import { Atendente } from "../nucleo/entidades/Atendente.js";
 import { Chatbot } from "../nucleo/entidades/Chatbot.js";
 import { Cliente } from "../nucleo/entidades/Cliente.js";
 import { Conversa } from "../nucleo/entidades/Conversa.js";
-import { Prioridade, StatusAtendente, StatusConversa, StatusTicket } from "../nucleo/entidades/Enums.js";
+import {
+  MotivoDaTransferencia,
+  Prioridade,
+  StatusAtendente,
+  StatusConversa,
+  StatusTicket,
+} from "../nucleo/entidades/Enums.js";
 import { Mensagem } from "../nucleo/entidades/Mensagem.js";
 import { Ticket } from "../nucleo/entidades/Ticket.js";
 
@@ -28,6 +35,8 @@ interface LinhaTicket {
   assunto: string;
   prioridade: string;
   status: string;
+  motivo: string;
+  dados: Record<string, unknown> | null;
   data_abertura: Date;
   data_fechamento: Date | null;
   resumo_bot: string;
@@ -53,7 +62,7 @@ interface LinhaTicket {
 // Uma consulta fornece um retrato consistente, sem uma ida ao banco por ticket/mensagem.
 // O LATERAL seleciona a classificação mais recente da entrada, sem multiplicar o histórico.
 const CONSULTA = `
-  SELECT t.id, t.assunto, t.prioridade, t.status,
+  SELECT t.id, t.assunto, t.prioridade, t.status, t.motivo, t.dados,
          t.data_abertura, t.data_fechamento, t.resumo_bot, t.conversa_id,
          c.criado_em AS conversa_criada_em, c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome, cl.telefone AS cliente_telefone,
          t.atendente_id, a.nome AS atendente_nome, a.email AS atendente_email,
@@ -99,6 +108,16 @@ function statusPersistido(valor: string): StatusTicket {
   }
 }
 
+function motivoPersistido(valor: string): MotivoDaTransferencia {
+  switch (valor) {
+    case MotivoDaTransferencia.PEDIDO_DO_CLIENTE: return MotivoDaTransferencia.PEDIDO_DO_CLIENTE;
+    case MotivoDaTransferencia.PERGUNTA_SEM_RESPOSTA: return MotivoDaTransferencia.PERGUNTA_SEM_RESPOSTA;
+    case MotivoDaTransferencia.FALHAS_SEGUIDAS: return MotivoDaTransferencia.FALHAS_SEGUIDAS;
+    case MotivoDaTransferencia.DEMANDA_NAO_ENCONTRADA: return MotivoDaTransferencia.DEMANDA_NAO_ENCONTRADA;
+    default: throw new Error("Motivo de ticket persistido inválido.");
+  }
+}
+
 function estadoDaConversa(valor: string): StatusConversa | null {
   switch (valor) {
     case "BOT":
@@ -128,7 +147,7 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
       " ORDER BY m.criado_em, m.id"))[0] ?? null;
   }
 
-  async enfileirar(conversaId: number): Promise<Ticket> {
+  async enfileirar(conversaId: number, pedido: PedidoDeAtendimento = PEDIDO_PADRAO): Promise<Ticket> {
     const db = await this.pool.connect();
     let erroDeRollback: Error | undefined;
     try {
@@ -142,21 +161,25 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
         throw new TicketIndisponivelError(existente[0].getId());
       }
       if (existente[0]) {
+        // Já tem ticket: devolve o mesmo, com o mesmo protocolo. O pedido novo é ignorado.
         await db.query("COMMIT");
         return existente[0];
       }
       if (rows[0].estado === StatusConversa.ENCERRADA) throw new Error("Conversa encerrada.");
       const id = randomUUID();
       // O resumo é fixado na abertura; o histórico continua vindo da tabela mensagens.
-      await db.query(`INSERT INTO tickets (id, conversa_id, assunto, prioridade, data_abertura, resumo_bot)
-        SELECT $1, c.id, 'Atendimento humano', 'MEDIA', now(),
+      // Assunto, prioridade, motivo e dados vêm do pedido (história 2.1), não são mais valores fixos.
+      await db.query(`INSERT INTO tickets (id, conversa_id, assunto, prioridade, motivo, dados, data_abertura, resumo_bot)
+        SELECT $1, c.id, $3::text, $4::text, $5::text, $6::jsonb, now(),
           COALESCE((SELECT string_agg(m.texto, E'\\n' ORDER BY m.criado_em, m.id)
             FROM mensagens m WHERE m.conversa_id = c.id AND m.texto <> ''), '')
-        FROM conversas c WHERE c.id = $2`, [id, conversaId]);
+        FROM conversas c WHERE c.id = $2`,
+        [id, conversaId, pedido.assunto, pedido.prioridade, pedido.motivo, JSON.stringify(pedido.dados)]);
       await db.query("UPDATE conversas SET estado = $2, atualizado_em = now() WHERE id = $1",
         [conversaId, StatusConversa.AGUARDANDO_ATENDENTE]);
       await db.query(`INSERT INTO eventos (conversa_id, tipo, origem, dados)
-        VALUES ($1, 'transferencia_humana', 'fila', $2)`, [conversaId, JSON.stringify({ protocolo: id })]);
+        VALUES ($1, 'transferencia_humana', 'fila', $2)`,
+        [conversaId, JSON.stringify({ protocolo: id, motivo: pedido.motivo, prioridade: pedido.prioridade })]);
       const [ticket] = await this.carregar(" WHERE t.id = $1", [id], " ORDER BY m.criado_em, m.id", db);
       await db.query("COMMIT");
       return ticket;
@@ -291,6 +314,8 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
         resumoBot: linha.resumo_bot,
         conversa,
         atendente,
+        motivo: motivoPersistido(linha.motivo),
+        dadosInformados: linha.dados ?? {},
       });
     });
   }

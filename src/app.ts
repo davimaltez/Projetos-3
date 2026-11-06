@@ -88,7 +88,6 @@ async function main(): Promise<void> {
     new EventoRepositorio(banco.pool),
     new ContextoMenuRepositorio(banco.pool),
     classificador,
-    gerador,
     new Menu(topicosDoMenu()),
     {
       confiancaMinima: config.iaConfiancaMinima,
@@ -99,7 +98,8 @@ async function main(): Promise<void> {
       limiteDeMensagens:
         config.limiteMensagensPorMinuto > 0 ? new LimitadorDeTaxa(config.limiteMensagensPorMinuto, UM_MINUTO_MS) : null,
     },
-    fila
+    fila,
+    gerador
   );
   console.log(
     config.limiteMensagensPorMinuto > 0
@@ -121,3 +121,11 @@ async function main(): Promise<void> {
     process.exit(0);
   };
   process.once("SIGINT", () => void encerrar("SIGINT"));
+  process.once("SIGTERM", () => void encerrar("SIGTERM"));
+}
+
+main().catch((erro) => {
+  console.error("[app] falha na inicialização:", erro instanceof Error ? erro.message : erro);
+  process.exit(1);
+});
+  

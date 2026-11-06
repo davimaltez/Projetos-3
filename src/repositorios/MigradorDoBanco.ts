@@ -26,6 +26,8 @@ export class MigradorDoBanco {
             : "migrations/002_fila_conforme_plano.sql");
         }
       }
+      // História 2.1: motivo da transferência e dados do ticket.
+      await this.aplicar(db, "migrations/004_motivo_e_dados_do_ticket.sql");
       // Não aceita silenciosamente uma estrutura desconhecida/incompleta.
       await db.query(`SELECT t.id, t.conversa_id, t.data_abertura, t.data_fechamento,
         a.status, a.especialidade, c.criado_em FROM tickets t

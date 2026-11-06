@@ -5,6 +5,7 @@ import type { Atendente } from "../nucleo/entidades/Atendente.js";
 import { StatusTicket } from "../nucleo/entidades/Enums.js";
 import type { Ticket } from "../nucleo/entidades/Ticket.js";
 import type { Conversa } from "../nucleo/entidades/Conversa.js";
+import { PEDIDO_PADRAO, type PedidoDeAtendimento } from "../nucleo/PedidoDeAtendimento.js";
 
 /**
  * Simulação para testes. Mantém tickets e atendentes cadastrados em arrays por instância e
@@ -27,7 +28,7 @@ export class RepositorioDeFilaEmMemoria implements RepositorioDeFila {
       .map((conversa) => [conversa.getId(), conversa]));
   }
 
-  async enfileirar(conversaId: number): Promise<Ticket> {
+  async enfileirar(conversaId: number, pedido: PedidoDeAtendimento = PEDIDO_PADRAO): Promise<Ticket> {
     const existente = this.#tickets.find((t) => t.getConversa().getId() === String(conversaId));
     if (existente) {
       if (existente.getStatus() === StatusTicket.ENCERRADO) throw new Error("Atendimento desta conversa já encerrado.");
@@ -36,7 +37,7 @@ export class RepositorioDeFilaEmMemoria implements RepositorioDeFila {
     const conversa = this.#conversas.get(String(conversaId));
     if (!conversa) throw new Error("Conversa não encontrada.");
     // Sem await: leitura e inclusão são indivisíveis nesta instância.
-    const ticket = conversa.transferirParaHumano();
+    const ticket = conversa.transferirParaHumano(pedido);
     this.#tickets.push(ticket);
     return ticket;
   }

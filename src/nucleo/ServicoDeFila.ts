@@ -5,6 +5,7 @@ import type { Atendente } from "./entidades/Atendente.js";
 import { StatusTicket } from "./entidades/Enums.js";
 import type { Mensagem } from "./entidades/Mensagem.js";
 import type { Ticket } from "./entidades/Ticket.js";
+import { PEDIDO_PADRAO, validarPedido, type PedidoDeAtendimento } from "./PedidoDeAtendimento.js";
 
 // Mantém os imports antigos (`from "./ServicoDeFila.js"`) funcionando.
 export { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila.js";
@@ -13,8 +14,8 @@ export { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila
 export class ServicoDeFila {
   constructor(private readonly repositorio: RepositorioDeFila) {}
 
-  async solicitarAtendimentoHumano(conversaId: number): Promise<Ticket> {
-    return this.repositorio.enfileirar(conversaId);
+  async solicitarAtendimentoHumano(conversaId: number, pedido: PedidoDeAtendimento = PEDIDO_PADRAO): Promise<Ticket> {
+    return this.repositorio.enfileirar(conversaId, validarPedido(pedido));
   }
 
   async obterAtendimentoHumano(conversaId: number): Promise<Ticket | null> {
