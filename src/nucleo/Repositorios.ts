@@ -9,7 +9,7 @@ import type { TrocaDeConversa } from "./GeradorDeResposta.js";
 
 export interface RepositorioDeClientes {
   /** Devolve o id do cliente com esse identificador (telefone, ou LID quando não há telefone); cria se não existir. */
-  obterOuCriar(identificador: string, origem: string): Promise<number>;
+  obterOuCriar(identificador: string, origem: string, enderecoResposta?: string): Promise<number>;
 }
 
 export interface RepositorioDeConversas {

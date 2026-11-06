@@ -159,6 +159,10 @@ describe("ServicoDeFila.assumirTicket", () => {
       listarAguardando: async () => [leituraAnterior],
       buscarPorId: async () => leituraAnterior,
       atribuirAtendente: async (id) => { throw new TicketIndisponivelError(id); },
+      buscarEmAtendimentoPorAtendente: async () => null,
+      obterDestinoDoCliente: async () => null,
+      registrarRespostaDoAtendente: async () => {},
+      encerrarTicket: async () => {},
     };
 
     await assert.rejects(new ServicoDeFila(repositorio).assumirTicket("disputado", ana), TicketIndisponivelError);
@@ -236,8 +240,8 @@ describe("RepositorioDeFilaEmMemoria", () => {
 
   test("recusa protocolos duplicados para evitar atribuição ambígua", () => {
     assert.throws(
-      () => new RepositorioDeFilaEmMemoria([criarTicket("repetido"), criarTicket("repetido")]),
-      /protocolos duplicados/,
+        () => new RepositorioDeFilaEmMemoria([criarTicket("repetido"), criarTicket("repetido")]),
+        /protocolos duplicados/,
     );
   });
 
@@ -258,8 +262,8 @@ describe("RepositorioDeFilaEmMemoria", () => {
     const ocupado = criarTicket("ocupado", Prioridade.URGENTE, 0);
     ocupado.atribuirAtendente(ana);
     assert.deepEqual(
-      (await criarRepositorio([antigo, ocupado, urgente]).listarAguardando()).map((t) => t.getId()),
-      ["urgente", "antigo"],
+        (await criarRepositorio([antigo, ocupado, urgente]).listarAguardando()).map((t) => t.getId()),
+        ["urgente", "antigo"],
     );
   });
 

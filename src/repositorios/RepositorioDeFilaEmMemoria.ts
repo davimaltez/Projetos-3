@@ -13,6 +13,7 @@ import type { Conversa } from "../nucleo/entidades/Conversa.js";
  */
 export class RepositorioDeFilaEmMemoria implements RepositorioDeFila {
   readonly #tickets: Ticket[];
+  readonly #enderecos = new Map<string,string>();
   readonly #atendentes: Atendente[];
   readonly #conversas: Map<string, Conversa>;
 
@@ -24,7 +25,7 @@ export class RepositorioDeFilaEmMemoria implements RepositorioDeFila {
     this.#tickets = [...tickets];
     this.#atendentes = [...atendentes];
     this.#conversas = new Map([...tickets.map((ticket) => ticket.getConversa()), ...conversas]
-      .map((conversa) => [conversa.getId(), conversa]));
+        .map((conversa) => [conversa.getId(), conversa]));
   }
 
   async enfileirar(conversaId: number): Promise<Ticket> {
@@ -47,12 +48,43 @@ export class RepositorioDeFilaEmMemoria implements RepositorioDeFila {
 
   async listarAguardando(): Promise<Ticket[]> {
     return this.#tickets
-      .filter((ticket) => ticket.getStatus() === StatusTicket.AGUARDANDO)
-      .sort(compararNaFila);
+        .filter((ticket) => ticket.getStatus() === StatusTicket.AGUARDANDO)
+        .sort(compararNaFila);
   }
 
   async buscarPorId(id: string): Promise<Ticket | null> {
     return this.#tickets.find((ticket) => ticket.getId() === id) ?? null;
+  }
+
+  /** Configuração de endereço do cliente apenas para cenários simulados. */
+  definirEnderecoCliente(protocolo: string, endereco: string): void { this.#enderecos.set(protocolo, endereco); }
+
+  async buscarEmAtendimentoPorAtendente(atendenteId: string): Promise<Ticket | null> {
+    return this.#tickets.find(t => t.getStatus() === StatusTicket.EM_ATENDIMENTO &&
+        t.getAtendente()?.getId() === atendenteId) ?? null;
+  }
+
+  async obterDestinoDoCliente(ticketId: string, atendenteId: string): Promise<string | null> {
+    const t = await this.buscarPorId(ticketId);
+    if (!t || t.getStatus() !== StatusTicket.EM_ATENDIMENTO || t.getAtendente()?.getId() !== atendenteId)
+      throw new TicketIndisponivelError(ticketId);
+    return this.#enderecos.get(ticketId) ?? null;
+  }
+
+  async registrarRespostaDoAtendente(ticketId: string, atendenteId: string, _idEnviado: string, texto: string): Promise<void> {
+    const t = await this.buscarPorId(ticketId);
+    if (!t || t.getStatus() !== StatusTicket.EM_ATENDIMENTO || t.getAtendente()?.getId() !== atendenteId)
+      throw new TicketIndisponivelError(ticketId);
+    const { Mensagem } = await import('../nucleo/entidades/Mensagem.js');
+    t.getConversa().adicionarMensagem(new Mensagem(texto, new Date(), t.getAtendente()!));
+  }
+
+  async encerrarTicket(ticketId: string, atendenteId: string): Promise<void> {
+    const t = await this.buscarPorId(ticketId);
+    if (!t || t.getStatus() !== StatusTicket.EM_ATENDIMENTO || t.getAtendente()?.getId() !== atendenteId)
+      throw new TicketIndisponivelError(ticketId);
+    t.fechar();
+    t.getConversa().encerrar();
   }
 
   async atribuirAtendente(ticketId: string, atendenteId: string): Promise<void> {

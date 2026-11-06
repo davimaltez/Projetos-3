@@ -24,6 +24,9 @@ export class FluxoDoOperador {
     private readonly porTelefone = new Map<string, Atendente>();
     /** Cada operador seleciona sobre a última lista que ele próprio recebeu. */
     private readonly selecoes = new Map<string, readonly string[]>();
+    private readonly ativos = new Map<string, string>();
+    private readonly sequencias = new Map<string, Promise<void>>();
+    private readonly processadas = new Set<string>();
 
     constructor(
         private readonly canal: CanalMensagens,
@@ -42,19 +45,94 @@ export class FluxoDoOperador {
         }
     }
 
-    /** Retorna true quando a mensagem pertence ao canal de operadores. */
+    /** Serializa comandos por operador e ignora reentregas já concluídas nesta execução. */
     async processarSeOperador(mensagem: MensagemRecebida): Promise<boolean> {
         const telefone = normalizarTelefone(mensagem.remetente);
-        if (!telefone || !this.porTelefone.has(telefone)) return false;
+        if (!telefone) return false;
+        const atendente = this.porTelefone.get(telefone);
+        if (!atendente) return false;
+        const chave = `${telefone}:${mensagem.idExterno}`;
+        const anterior = this.sequencias.get(telefone) ?? Promise.resolve();
+        const atual = anterior.catch(() => {}).then(async () => {
+            if (this.processadas.has(chave)) return;
+            await this.processarAutorizado(mensagem, telefone, atendente);
+            // Evita retenção ilimitada de mensagens durante longas sessões do bot.
+            if (this.processadas.size >= 1000) this.processadas.clear();
+            this.processadas.add(chave);
+        });
+        this.sequencias.set(telefone, atual);
+        try { await atual; } finally {
+            if (this.sequencias.get(telefone) === atual) this.sequencias.delete(telefone);
+        }
+        return true;
+    }
+
+    private async processarAutorizado(
+        mensagem: MensagemRecebida, telefone: string, atendente: Atendente
+    ): Promise<void> {
+        let ativo = this.ativos.get(telefone);
+        if (!ativo) {
+            const ticket = await this.fila.obterTicketAtivo(atendente);
+            ativo = ticket?.getProtocolo();
+            if (ativo) this.ativos.set(telefone, ativo);
+        }
 
         const comando = mensagem.texto.trim().toLocaleLowerCase("pt-BR");
+        if (comando === "encerrar") {
+            if (!ativo) {
+                await this.canal.enviarTexto(mensagem.enderecoResposta, 'Você não possui atendimento ativo. Envie "fila".');
+                return;
+            }
+            try {
+                await this.fila.encerrarAtendimento(ativo, atendente);
+            } catch (erro) {
+                if (!(erro instanceof TicketIndisponivelError || erro instanceof TicketNaoEncontradoError)) throw erro;
+                await this.canal.enviarTexto(mensagem.enderecoResposta,
+                    'Este atendimento já foi encerrado ou não pertence a você.');
+                this.ativos.delete(telefone);
+                return;
+            }
+            this.ativos.delete(telefone);
+            this.selecoes.delete(telefone);
+            await this.canal.enviarTexto(mensagem.enderecoResposta,
+                `Atendimento ${ativo} encerrado. Envie "fila" para consultar novos casos.`);
+            return;
+        }
+
+        if (ativo) {
+            if (comando === "fila") {
+                await this.canal.enviarTexto(mensagem.enderecoResposta,
+                    `Você está atendendo o protocolo ${ativo}. Responda ao cliente ou envie "encerrar".`);
+                return;
+            }
+            try {
+                await this.fila.responderCliente(ativo, atendente, mensagem.texto,
+                    (destino, texto) => this.canal.enviarTexto(destino, texto));
+            } catch (erro) {
+                if (erro instanceof TicketIndisponivelError || erro instanceof TicketNaoEncontradoError) {
+                    this.ativos.delete(telefone);
+                    await this.canal.enviarTexto(mensagem.enderecoResposta,
+                        'Este atendimento não está mais ativo para você. Envie "fila".');
+                    return;
+                }
+                if (erro instanceof Error && erro.message.startsWith('Endereço de resposta')) {
+                    await this.canal.enviarTexto(mensagem.enderecoResposta, erro.message);
+                    return;
+                }
+                throw erro;
+            }
+            await this.canal.enviarTexto(mensagem.enderecoResposta,
+                `Resposta enviada ao cliente e registrada no histórico (${ativo}).`);
+            return;
+        }
+
         if (comando === "fila") {
             // Apaga lista anterior mesmo em fila vazia; números antigos deixam de ser aceitos.
             this.selecoes.delete(telefone);
             const tickets = await this.fila.listarFila();
             if (tickets.length === 0) {
                 await this.canal.enviarTexto(mensagem.enderecoResposta, "Não há atendimentos aguardando no momento.");
-                return true;
+                return;
             }
             this.selecoes.set(telefone, tickets.map(t => t.getProtocolo()));
             const linhas = tickets.map((t, i) =>
@@ -62,7 +140,7 @@ export class FluxoDoOperador {
             );
             await this.canal.enviarTexto(mensagem.enderecoResposta,
                 `Fila de atendimentos (${tickets.length}):\n${linhas.join("\n")}\n\nResponda com o número do atendimento que deseja assumir.`);
-            return true;
+            return;
         }
 
         if (/^[1-9]\d*$/.test(comando)) {
@@ -70,33 +148,34 @@ export class FluxoDoOperador {
             const indice = Number(comando) - 1;
             if (!protocolos) {
                 await this.canal.enviarTexto(mensagem.enderecoResposta, 'Envie "fila" antes de escolher um atendimento.');
-                return true;
+                return;
             }
             if (!Number.isSafeInteger(indice) || indice < 0 || indice >= protocolos.length) {
                 await this.canal.enviarTexto(mensagem.enderecoResposta, 'Número inválido. Escolha uma opção da lista ou envie "fila" novamente.');
-                return true;
+                return;
             }
 
             // Consome a seleção para não assumir outro ticket com o mesmo comando repetido.
             this.selecoes.delete(telefone);
             const protocolo = protocolos[indice];
-            const atendente = this.porTelefone.get(telefone)!;
             try {
                 await this.fila.assumirTicket(protocolo, atendente);
             } catch (erro) {
                 if (erro instanceof TicketIndisponivelError) {
                     await this.canal.enviarTexto(mensagem.enderecoResposta,
                         'Essa conversa já foi assumida por outra pessoa da equipe. Envie "fila" para atualizar a lista.');
-                    return true;
+                    return;
                 }
                 if (erro instanceof TicketNaoEncontradoError) {
                     await this.canal.enviarTexto(mensagem.enderecoResposta,
                         'Esse atendimento não está mais disponível. Envie "fila" para atualizar a lista.');
-                    return true;
+                    return;
                 }
                 throw erro;
             }
 
+            // Marca como ativo antes da leitura do histórico: se a leitura falhar, o ticket continua recuperável.
+            this.ativos.set(telefone, protocolo);
             // Histórico é recuperado após a atribuição persistida: nada depende de uma cópia antiga da fila.
             const historico = await this.fila.obterHistoricoDoTicket(protocolo);
             const linhas = historico.map(m => {
@@ -106,12 +185,12 @@ export class FluxoDoOperador {
             await this.canal.enviarTexto(mensagem.enderecoResposta,
                 `Novo atendimento — protocolo ${protocolo}\n` +
                 (linhas.length ? `Histórico da conversa:\n${linhas.join("\n")}` : 'A conversa ainda não possui mensagens registradas.'));
-            return true;
+            return;
         }
 
         await this.canal.enviarTexto(mensagem.enderecoResposta,
-            'Comando do operador: envie "fila" para consultar os atendimentos pendentes e responda com o número desejado.');
-        return true;
+            'Comando do operador: envie "fila" para consultar atendimentos, selecione o número, responda ao cliente e use "encerrar" ao terminar.');
+        return;
     }
 }
 

@@ -112,3 +112,104 @@ test("dois operadores com lista antiga não assumem o mesmo ticket", async () =>
     assert.equal(ticket.getAtendente()?.getId(), "7");
     assert.match(canal.enviadas.at(-1)!.texto, /já foi assumida/);
 });
+
+function cenarioAtivo() {
+    const cliente = new Cliente(1, 'Cliente', 'cliente@example.com', '5581888888888');
+    const bot = new Chatbot('wxn', 'Bot', 'simples', 2, true);
+    const conversa = new Conversa(70, 'simulado', cliente, bot);
+    conversa.adicionarMensagem(new Mensagem('Preciso de ajuda', new Date(), cliente));
+    const repo = new RepositorioDeFilaEmMemoria([], [operador], [conversa]);
+    const fila = new ServicoDeFila(repo);
+    const canal = new CanalSimulado();
+    const fluxo = new FluxoDoOperador(canal, fila, [operador], [{ id: 7, telefone: '5581999999999' }]);
+    let seq = 0;
+    const enviar = async (texto: string) => fluxo.processarSeOperador({
+        idExterno: `teste-${++seq}`, remetente: '5581999999999', enderecoResposta: 'operador', texto,
+    });
+    return { cliente, conversa, repo, fila, canal, fluxo, enviar };
+}
+
+test('operador envia resposta com assinatura ao endereço exato do cliente e registra autoria', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    c.repo.definirEnderecoCliente(ticket.getId(), 'cliente@lid');
+    await c.enviar('fila');
+    await c.enviar('1');
+    await c.enviar('Vou verificar sua solicitação.');
+    const envio = c.canal.enviadas.find(m => m.endereco === 'cliente@lid');
+    assert.ok(envio);
+    assert.match(envio.texto, /Operador \(equipe WXN\): Vou verificar/);
+    const historico = await c.fila.obterHistoricoDoTicket(ticket.getId());
+    assert.equal(historico.at(-1)?.getRemetente().getIdentificacao(), operador.getIdentificacao());
+    assert.match(historico.at(-1)!.getTexto(), /Vou verificar/);
+});
+
+test('encerrar fecha ticket e conversa e impede respostas posteriores', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    c.repo.definirEnderecoCliente(ticket.getId(), 'cliente@lid');
+    await c.enviar('fila');
+    await c.enviar('1');
+    await c.enviar('encerrar');
+    assert.equal(ticket.getStatus(), 'ENCERRADO');
+    assert.equal(c.conversa.getStatus(), 'ENCERRADA');
+    assert.match(c.canal.enviadas.at(-1)!.texto, /encerrado/);
+    await c.enviar('Outra mensagem');
+    assert.equal(c.canal.enviadas.filter(m => m.endereco === 'cliente@lid').length, 0);
+});
+
+test('falta de JID exato não inventa destino e não registra mensagem humana', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    await c.enviar('fila');
+    await c.enviar('1');
+    const antes = (await c.fila.obterHistoricoDoTicket(ticket.getId())).length;
+    await c.enviar('Mensagem não entregue');
+    assert.equal((await c.fila.obterHistoricoDoTicket(ticket.getId())).length, antes);
+    assert.match(c.canal.enviadas.at(-1)!.texto, /Endereço de resposta do cliente indisponível/);
+});
+
+test('falha do canal não gera histórico falso e permite nova tentativa', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    c.repo.definirEnderecoCliente(ticket.getId(), 'cliente@lid');
+    await c.enviar('fila');
+    await c.enviar('1');
+    const antes = (await c.fila.obterHistoricoDoTicket(ticket.getId())).length;
+    c.canal.falharProximoEnvio = true;
+    await assert.rejects(c.enviar('Falhou'), /Falha simulada/);
+    assert.equal((await c.fila.obterHistoricoDoTicket(ticket.getId())).length, antes);
+    await c.enviar('Funcionou');
+    assert.equal((await c.fila.obterHistoricoDoTicket(ticket.getId())).length, antes + 1);
+});
+
+test('não é permitido outro operador encerrar ou responder no ticket assumido', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    await c.fila.assumirTicket(ticket.getId(), operador);
+    const estranho = new Atendente(9, 'Intruso', 'intruso@example.com');
+    await assert.rejects(c.fila.encerrarAtendimento(ticket.getId(), estranho));
+    await assert.rejects(c.fila.responderCliente(ticket.getId(), estranho, 'Não pode', async () => 'id'));
+    assert.equal(ticket.getStatus(), 'EM_ATENDIMENTO');
+});
+
+test('reconstrói atendimento ativo após recriar fluxo do operador', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    c.repo.definirEnderecoCliente(ticket.getId(), 'cliente@lid');
+    await c.fila.assumirTicket(ticket.getId(), operador);
+    // Não enviamos "fila"; fluxo encontra ticket por ID persistido no repositório.
+    await c.enviar('Boa tarde');
+    assert.match(c.canal.enviadas.at(-2)!.texto, /Boa tarde/);
+    assert.equal(c.canal.enviadas.at(-2)!.endereco, 'cliente@lid');
+});
+
+test('mesmo evento WhatsApp recebido duas vezes não produz resposta humana duplicada no processo', async () => {
+    const c = cenarioAtivo();
+    const ticket = await c.fila.solicitarAtendimentoHumano(70);
+    c.repo.definirEnderecoCliente(ticket.getId(), 'cliente@lid');
+    await c.fila.assumirTicket(ticket.getId(), operador);
+    const mensagem = { idExterno: 'duplicada', remetente: '5581999999999', enderecoResposta: 'operador', texto: 'Uma resposta' };
+    await Promise.all([c.fluxo.processarSeOperador(mensagem), c.fluxo.processarSeOperador(mensagem)]);
+    assert.equal(c.canal.enviadas.filter(m => m.endereco === 'cliente@lid').length, 1);
+});

@@ -30,4 +30,16 @@ export interface RepositorioDeFila {
    * condicional); uma leitura seguida de gravação sem proteção não é suficiente.
    */
   atribuirAtendente(ticketId: string, atendenteId: string): Promise<void>;
+
+  /** Recupera o ticket em andamento de um operador após reiniciar o processo. */
+  buscarEmAtendimentoPorAtendente(atendenteId: string): Promise<Ticket | null>;
+
+  /** Retorna o endereço exato do canal somente para o operador responsável. */
+  obterDestinoDoCliente(ticketId: string, atendenteId: string): Promise<string | null>;
+
+  /** Registra a saída enviada, vinculando-a ao atendente (e não ao chatbot). */
+  registrarRespostaDoAtendente(ticketId: string, atendenteId: string, idEnviado: string, texto: string): Promise<void>;
+
+  /** Encerra ticket e conversa atomicamente, somente para o operador responsável. */
+  encerrarTicket(ticketId: string, atendenteId: string): Promise<void>;
 }

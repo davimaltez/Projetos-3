@@ -18,16 +18,16 @@ import { TOPICOS, topicosAtivos, type Topico } from "./Topicos.js";
 
 /** Como a decisão foi tomada. Vai para eventos.origem e explica cada resposta no relatório. */
 type OrigemDecisao =
-  | "menu" // usuário digitou o número de uma opção
-  | "menu_texto" // usuário escreveu algo que corresponde a uma opção do nível (sem IA)
-  | "menu_invalido" // digitou um número que não é opção → menu de novo, sem IA
-  | "ia" // IA classificou com confiança suficiente
-  | "ia_incerta" // IA respondeu, mas indefinido ou confiança baixa → menu
-  | "ia_falhou" // erro, timeout ou resposta inválida → menu
-  | "ia_gerada" // modo pergunta: a IA escreveu a resposta com base no manual
-  | "ia_sem_resposta" // modo pergunta: o manual não cobre → frase fixa
-  | "ia_gerada_falhou" // modo pergunta: erro ou timeout do gerador → frase fixa
-  | "sem_ia"; // nenhuma chave configurada → sempre menu
+    | "menu" // usuário digitou o número de uma opção
+    | "menu_texto" // usuário escreveu algo que corresponde a uma opção do nível (sem IA)
+    | "menu_invalido" // digitou um número que não é opção → menu de novo, sem IA
+    | "ia" // IA classificou com confiança suficiente
+    | "ia_incerta" // IA respondeu, mas indefinido ou confiança baixa → menu
+    | "ia_falhou" // erro, timeout ou resposta inválida → menu
+    | "ia_gerada" // modo pergunta: a IA escreveu a resposta com base no manual
+    | "ia_sem_resposta" // modo pergunta: o manual não cobre → frase fixa
+    | "ia_gerada_falhou" // modo pergunta: erro ou timeout do gerador → frase fixa
+    | "sem_ia"; // nenhuma chave configurada → sempre menu
 
 interface Decisao {
   topico: Topico | null; // null = mostrar o menu
@@ -94,17 +94,17 @@ export class Atendimento {
   private readonly porRemetente = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly canal: CanalMensagens,
-    private readonly clientes: RepositorioDeClientes,
-    private readonly conversas: RepositorioDeConversas,
-    private readonly mensagens: RepositorioDeMensagens,
-    private readonly eventos: RepositorioDeEventos,
-    private readonly contextoMenu: RepositorioDeContextoDoMenu,
-    private readonly classificador: ClassificadorDeIntencao | null,
-    private readonly gerador: GeradorDeResposta | null,
-    private readonly menu: Menu,
-    private readonly opcoes: OpcoesDeAtendimento,
-    private readonly fila: ServicoDeFila
+      private readonly canal: CanalMensagens,
+      private readonly clientes: RepositorioDeClientes,
+      private readonly conversas: RepositorioDeConversas,
+      private readonly mensagens: RepositorioDeMensagens,
+      private readonly eventos: RepositorioDeEventos,
+      private readonly contextoMenu: RepositorioDeContextoDoMenu,
+      private readonly classificador: ClassificadorDeIntencao | null,
+      private readonly gerador: GeradorDeResposta | null,
+      private readonly menu: Menu,
+      private readonly opcoes: OpcoesDeAtendimento,
+      private readonly fila: ServicoDeFila
   ) {}
 
   async processar(mensagem: MensagemRecebida): Promise<void> {
@@ -150,16 +150,16 @@ export class Atendimento {
 
     const decisao = await this.decidir(mensagem.texto, estadoAnterior);
     const ticket = decisao.topico?.id === "atendimento_humano"
-      ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId)) : null;
+        ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId)) : null;
     const resposta = ticket
-      ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
-        ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
-        : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
-      : this.textoDaResposta(decisao);
+        ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
+            ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
+            : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
+        : this.textoDaResposta(decisao);
 
     // Log sem dados pessoais: telefone mascarado e só o começo do texto (ver PrivacidadeDeLog).
     console.log(
-      `[atendimento] ${mascararRemetente(mensagem.remetente)}: ${resumirTextoParaLog(mensagem.texto)} → ${decisao.topico?.id ?? "menu"} (${decisao.origem}` +
+        `[atendimento] ${mascararRemetente(mensagem.remetente)}: ${resumirTextoParaLog(mensagem.texto)} → ${decisao.topico?.id ?? "menu"} (${decisao.origem}` +
         (decisao.confianca !== null ? `, confiança ${decisao.confianca.toFixed(2)}` : "") +
         ")"
     );
@@ -207,7 +207,7 @@ export class Atendimento {
    */
   private async gravarEntrada(mensagem: MensagemRecebida): Promise<{ conversaId: number; entradaId: number } | null> {
     try {
-      const clienteId = await this.clientes.obterOuCriar(mensagem.remetente, this.canal.nome);
+      const clienteId = await this.clientes.obterOuCriar(mensagem.remetente, this.canal.nome, mensagem.enderecoResposta);
       const conversaId = await this.conversas.obterOuCriarAtual(clienteId);
       const entradaId = await this.mensagens.registrarEntrada(conversaId, mensagem.idExterno, mensagem.texto);
       return entradaId === null ? null : { conversaId, entradaId };
@@ -283,8 +283,8 @@ export class Atendimento {
 
     // 4) IA. Na raiz escolhe entre os tópicos principais; num sub-menu, só entre as opções daquele nível.
     return caminho.length === 0
-      ? this.classificarTopico(texto, this.classificador)
-      : this.classificarNoNivel(texto, caminho, this.classificador);
+        ? this.classificarTopico(texto, this.classificador)
+        : this.classificarNoNivel(texto, caminho, this.classificador);
   }
 
   /** Opção escolhida (por número, texto ou IA): vira a decisão com o texto e o novo estado do menu. */
@@ -315,10 +315,10 @@ export class Atendimento {
 
   /** Modo pergunta: o gerador responde com base no manual. Nunca lança: falha vira frase fixa. */
   private async gerarResposta(
-    texto: string,
-    caminho: readonly string[],
-    historico: readonly TrocaDeConversa[],
-    gerador: GeradorDeResposta
+      texto: string,
+      caminho: readonly string[],
+      historico: readonly TrocaDeConversa[],
+      gerador: GeradorDeResposta
   ): Promise<Decisao> {
     const base = {
       ...PADRAO,
@@ -385,9 +385,9 @@ export class Atendimento {
 
   /** Sub-menu: a IA escolhe só entre as opções do nível atual. Dúvida ou falha repete o nível. */
   private async classificarNoNivel(
-    texto: string,
-    caminho: readonly string[],
-    classificador: ClassificadorDeIntencao
+      texto: string,
+      caminho: readonly string[],
+      classificador: ClassificadorDeIntencao
   ): Promise<Decisao> {
     const inicio = Date.now();
     try {
@@ -444,10 +444,10 @@ export class Atendimento {
    */
   private async guardarEstado(conversaId: number, anterior: EstadoDoMenu, novo: EstadoDoMenu): Promise<void> {
     const igual =
-      anterior.perguntando === novo.perguntando &&
-      anterior.historico.length === novo.historico.length &&
-      anterior.caminho.length === novo.caminho.length &&
-      anterior.caminho.every((id, i) => id === novo.caminho[i]);
+        anterior.perguntando === novo.perguntando &&
+        anterior.historico.length === novo.historico.length &&
+        anterior.caminho.length === novo.caminho.length &&
+        anterior.caminho.every((id, i) => id === novo.caminho[i]);
     if (igual && !novo.perguntando) return;
 
     try {

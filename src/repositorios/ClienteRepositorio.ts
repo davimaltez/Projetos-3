@@ -9,12 +9,12 @@ export class ClienteRepositorio implements RepositorioDeClientes {
    * a mesma pessoa manda duas mensagens seguidas: as duas veem "não existe",
    * as duas tentam inserir, e a segunda estoura a UNIQUE de telefone.
    */
-  async obterOuCriar(telefone: string, origem: string): Promise<number> {
+  async obterOuCriar(telefone: string, origem: string, enderecoResposta?: string): Promise<number> {
     const { rows } = await this.pool.query<{ id: number }>(
-      `INSERT INTO clientes (telefone, origem) VALUES ($1, $2)
-       ON CONFLICT (telefone) DO UPDATE SET telefone = EXCLUDED.telefone
-       RETURNING id`,
-      [telefone, origem]
+        `INSERT INTO clientes (telefone, origem, endereco_resposta) VALUES ($1, $2, $3)
+          ON CONFLICT (telefone) DO UPDATE SET endereco_resposta = EXCLUDED.endereco_resposta
+                                      RETURNING id`,
+        [telefone, origem, enderecoResposta ?? null]
     );
     return rows[0].id;
   }
