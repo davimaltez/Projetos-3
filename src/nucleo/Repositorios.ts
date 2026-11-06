@@ -23,8 +23,8 @@ export interface DadosDoCliente {
 
 export interface RepositorioDeClientes {
   /** Devolve o id do cliente com esse identificador (telefone, ou LID quando não há telefone); cria se não existir. */
-  obterOuCriar(identificador: string, origem: string): Promise<number>;
-  /** Busca dados reais do cliente cadastrado (nome, empresa, telefone). */
+  obterOuCriar(identificador: string, origem: string, enderecoResposta?: string): Promise<number>;
+  /** Consulta os dados do cliente para preencher o pedido de transferência. */
   obterPorId?(id: number): Promise<DadosDoCliente | null>;
 }
 
@@ -67,9 +67,7 @@ export interface EstadoDoMenu {
   readonly perguntando: boolean;
   /** Últimas perguntas e respostas do modo pergunta (vazio fora dele). */
   readonly historico: readonly TrocaDeConversa[];
-  /** Mensagens consecutivas não reconhecidas (0, 1 ou 2). */
   readonly falhasSeguidas?: number;
-  /** Proposta de transferência aguardando confirmação (sim/não) do cliente. */
   readonly transferenciaPendente?: TransferenciaPendente | null;
 }
 
@@ -77,6 +75,5 @@ export interface RepositorioDeContextoDoMenu {
   /** Estado atual. Vazio (menu principal) se não houver ou se tiver expirado. */
   obter(conversaId: number): Promise<EstadoDoMenu>;
   salvar(conversaId: number, estado: EstadoDoMenu): Promise<void>;
-  /** Busca a empresa informada no contexto da conversa, se disponível. */
   obterEmpresa?(conversaId: number): Promise<string | null>;
 }

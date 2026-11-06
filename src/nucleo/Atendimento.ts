@@ -21,16 +21,16 @@ import { TOPICOS, topicosAtivos, type Topico } from "./Topicos.js";
 
 /** Como a decisão foi tomada. Vai para eventos.origem e explica cada resposta no relatório. */
 type OrigemDecisao =
-  | "menu" // usuário digitou o número de uma opção
-  | "menu_texto" // usuário escreveu algo que corresponde a uma opção do nível (sem IA)
-  | "menu_invalido" // digitou um número que não é opção → menu de novo, sem IA
-  | "ia" // IA classificou com confiança suficiente
-  | "ia_incerta" // IA respondeu, mas indefinido ou confiança baixa → menu
-  | "ia_falhou" // erro, timeout ou resposta inválida → menu
-  | "ia_gerada" // modo pergunta: a IA escreveu a resposta com base no manual
-  | "ia_sem_resposta" // modo pergunta: o manual não cobre → frase fixa
-  | "ia_gerada_falhou" // modo pergunta: erro ou timeout do gerador → frase fixa
-  | "sem_ia"; // nenhuma chave configurada → sempre menu
+    | "menu" // usuário digitou o número de uma opção
+    | "menu_texto" // usuário escreveu algo que corresponde a uma opção do nível (sem IA)
+    | "menu_invalido" // digitou um número que não é opção → menu de novo, sem IA
+    | "ia" // IA classificou com confiança suficiente
+    | "ia_incerta" // IA respondeu, mas indefinido ou confiança baixa → menu
+    | "ia_falhou" // erro, timeout ou resposta inválida → menu
+    | "ia_gerada" // modo pergunta: a IA escreveu a resposta com base no manual
+    | "ia_sem_resposta" // modo pergunta: o manual não cobre → frase fixa
+    | "ia_gerada_falhou" // modo pergunta: erro ou timeout do gerador → frase fixa
+    | "sem_ia"; // nenhuma chave configurada → sempre menu
 
 interface Decisao {
   topico: Topico | null; // null = mostrar o menu
@@ -94,21 +94,21 @@ const MAX_TROCAS = 3;
 
 // Mensagens da confirmação de atendimento humano (história 2.1)
 const TEXTO_CONFIRMAR_TRANSFERENCIA_FALHAS =
-  "Não consegui entender sua solicitação. Deseja falar com um atendente humano? Digite Sim ou Não (ou 1 para Sim / 2 para Não).";
+    "Não consegui entender sua solicitação. Deseja falar com um atendente humano? Digite Sim ou Não (ou 1 para Sim / 2 para Não).";
 const TEXTO_CONFIRMAR_TRANSFERENCIA_PERGUNTA =
-  "Não encontrei essa informação no nosso manual. Deseja falar com um atendente humano? Digite Sim ou Não (ou 1 para Sim / 2 para Não).";
+    "Não encontrei essa informação no nosso manual. Deseja falar com um atendente humano? Digite Sim ou Não (ou 1 para Sim / 2 para Não).";
 const TEXTO_RESPOSTA_AMBIGUA_CONFIRMACAO =
-  "Por favor, responda apenas Sim ou Não (ou 1 para Sim / 2 para Não): você deseja falar com um atendente humano?";
+    "Por favor, responda apenas Sim ou Não (ou 1 para Sim / 2 para Não): você deseja falar com um atendente humano?";
 const TEXTO_RECUSA_TRANSFERENCIA = "Tudo bem! Vamos continuar por aqui.";
 
 function normalizarTexto(texto: string): string {
   return texto
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 }
 
 function ehConfirmacaoSim(texto: string): boolean {
@@ -140,17 +140,17 @@ export class Atendimento {
   private readonly porRemetente = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly canal: CanalMensagens,
-    private readonly clientes: RepositorioDeClientes,
-    private readonly conversas: RepositorioDeConversas,
-    private readonly mensagens: RepositorioDeMensagens,
-    private readonly eventos: RepositorioDeEventos,
-    private readonly contextoMenu: RepositorioDeContextoDoMenu,
-    private readonly classificador: ClassificadorDeIntencao | null,
-    private readonly menu: Menu,
-    private readonly opcoes: OpcoesDeAtendimento,
-    private readonly fila: ServicoDeFila,
-    private readonly gerador: GeradorDeResposta | null = null
+      private readonly canal: CanalMensagens,
+      private readonly clientes: RepositorioDeClientes,
+      private readonly conversas: RepositorioDeConversas,
+      private readonly mensagens: RepositorioDeMensagens,
+      private readonly eventos: RepositorioDeEventos,
+      private readonly contextoMenu: RepositorioDeContextoDoMenu,
+      private readonly classificador: ClassificadorDeIntencao | null,
+      private readonly menu: Menu,
+      private readonly opcoes: OpcoesDeAtendimento,
+      private readonly fila: ServicoDeFila,
+      private readonly gerador: GeradorDeResposta | null = null
   ) {}
 
   async processar(mensagem: MensagemRecebida): Promise<void> {
@@ -190,8 +190,8 @@ export class Atendimento {
       if (estadoAnterior.transferenciaPendente && ehConfirmacaoSim(mensagem.texto)) {
         // Se por falha anterior o ticket já foi criado no banco, mas a pendência ainda constava no estado
         const resposta = humano.getStatus() === StatusTicket.EM_ATENDIMENTO
-          ? `Seu atendimento já está com a equipe. Protocolo: ${humano.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
-          : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${humano.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`;
+            ? `Seu atendimento já está com a equipe. Protocolo: ${humano.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
+            : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${humano.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`;
         await this.guardarEstado(conversaId, estadoAnterior, {
           caminho: [],
           perguntando: false,
@@ -221,19 +221,19 @@ export class Atendimento {
 
     const decisao = await this.decidir(mensagem.texto, estadoAnterior, clienteInfo);
     const ticket = decisao.solicitarPedido
-      ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId, decisao.solicitarPedido!))
-      : decisao.topico?.id === "atendimento_humano"
-      ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId))
-      : null;
+        ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId, decisao.solicitarPedido!))
+        : decisao.topico?.id === "atendimento_humano"
+            ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId))
+            : null;
     const resposta = ticket
-      ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
-        ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
-        : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
-      : this.textoDaResposta(decisao);
+        ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
+            ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
+            : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
+        : this.textoDaResposta(decisao);
 
     // Log sem dados pessoais: telefone mascarado e só o começo do texto (ver PrivacidadeDeLog).
     console.log(
-      `[atendimento] ${mascararRemetente(mensagem.remetente)}: ${resumirTextoParaLog(mensagem.texto)} → ${decisao.topico?.id ?? "menu"} (${decisao.origem}` +
+        `[atendimento] ${mascararRemetente(mensagem.remetente)}: ${resumirTextoParaLog(mensagem.texto)} → ${decisao.topico?.id ?? "menu"} (${decisao.origem}` +
         (decisao.confianca !== null ? `, confiança ${decisao.confianca.toFixed(2)}` : "") +
         ")"
     );
@@ -284,10 +284,10 @@ export class Atendimento {
    * já foi respondido.
    */
   private async gravarEntrada(
-    mensagem: MensagemRecebida
+      mensagem: MensagemRecebida
   ): Promise<{ conversaId: number; entradaId: number; clienteId: number } | null> {
     try {
-      const clienteId = await this.clientes.obterOuCriar(mensagem.remetente, this.canal.nome);
+      const clienteId = await this.clientes.obterOuCriar(mensagem.remetente, this.canal.nome, mensagem.enderecoResposta);
       const conversaId = await this.conversas.obterOuCriarAtual(clienteId);
       const entradaId = await this.mensagens.registrarEntrada(conversaId, mensagem.idExterno, mensagem.texto);
       return entradaId === null ? null : { conversaId, entradaId, clienteId };
@@ -499,16 +499,16 @@ export class Atendimento {
 
     // 4) IA. Na raiz escolhe entre os tópicos principais; num sub-menu, só entre as opções daquele nível.
     return caminho.length === 0
-      ? this.classificarTopico(texto, this.classificador, estado, clienteInfo)
-      : this.classificarNoNivel(texto, caminho, this.classificador, estado, clienteInfo);
+        ? this.classificarTopico(texto, this.classificador, estado, clienteInfo)
+        : this.classificarNoNivel(texto, caminho, this.classificador, estado, clienteInfo);
   }
 
   /** Opção escolhida (por número, texto ou IA): vira a decisão com o texto e o novo estado do menu. */
   private decisaoDeSelecao(
-    selecao: Selecao,
-    origem: OrigemDecisao,
-    clienteInfo: DadosDoCliente,
-    estado: EstadoDoMenu
+      selecao: Selecao,
+      origem: OrigemDecisao,
+      clienteInfo: DadosDoCliente,
+      estado: EstadoDoMenu
   ): Decisao {
     if (selecao.tipo === "perguntar") {
       // Sem gerador (sem chave ou sem manual), a opção avisa em vez de prender o cliente num modo mudo.
@@ -570,11 +570,11 @@ export class Atendimento {
 
   /** Modo pergunta: o gerador responde com base no manual. Nunca lança: falha vira frase fixa. */
   private async gerarResposta(
-    texto: string,
-    caminho: readonly string[],
-    historico: readonly TrocaDeConversa[],
-    gerador: GeradorDeResposta,
-    clienteInfo: DadosDoCliente
+      texto: string,
+      caminho: readonly string[],
+      historico: readonly TrocaDeConversa[],
+      gerador: GeradorDeResposta,
+      clienteInfo: DadosDoCliente
   ): Promise<Decisao> {
     const base = {
       ...PADRAO,
@@ -638,10 +638,10 @@ export class Atendimento {
 
   /** Menu principal: a IA escolhe entre os tópicos principais. */
   private async classificarTopico(
-    texto: string,
-    classificador: ClassificadorDeIntencao,
-    estado: EstadoDoMenu,
-    clienteInfo: DadosDoCliente
+      texto: string,
+      classificador: ClassificadorDeIntencao,
+      estado: EstadoDoMenu,
+      clienteInfo: DadosDoCliente
   ): Promise<Decisao> {
     const inicio = Date.now();
     try {
@@ -725,11 +725,11 @@ export class Atendimento {
 
   /** Sub-menu: a IA escolhe só entre as opções do nível atual. Dúvida ou falha repete o nível. */
   private async classificarNoNivel(
-    texto: string,
-    caminho: readonly string[],
-    classificador: ClassificadorDeIntencao,
-    estado: EstadoDoMenu,
-    clienteInfo: DadosDoCliente
+      texto: string,
+      caminho: readonly string[],
+      classificador: ClassificadorDeIntencao,
+      estado: EstadoDoMenu,
+      clienteInfo: DadosDoCliente
   ): Promise<Decisao> {
     const inicio = Date.now();
     try {
@@ -814,12 +814,12 @@ export class Atendimento {
    */
   private async guardarEstado(conversaId: number, anterior: EstadoDoMenu, novo: EstadoDoMenu): Promise<void> {
     const igual =
-      anterior.perguntando === novo.perguntando &&
-      anterior.falhasSeguidas === novo.falhasSeguidas &&
-      anterior.transferenciaPendente === novo.transferenciaPendente &&
-      anterior.historico.length === novo.historico.length &&
-      anterior.caminho.length === novo.caminho.length &&
-      anterior.caminho.every((id, i) => id === novo.caminho[i]);
+        anterior.perguntando === novo.perguntando &&
+        anterior.falhasSeguidas === novo.falhasSeguidas &&
+        anterior.transferenciaPendente === novo.transferenciaPendente &&
+        anterior.historico.length === novo.historico.length &&
+        anterior.caminho.length === novo.caminho.length &&
+        anterior.caminho.every((id, i) => id === novo.caminho[i]);
     if (igual && !novo.perguntando && !novo.transferenciaPendente) return;
 
     try {
