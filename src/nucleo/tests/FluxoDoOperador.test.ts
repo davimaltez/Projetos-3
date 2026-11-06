@@ -5,6 +5,7 @@ import { Atendente } from "../entidades/Atendente.js";
 import { Cliente } from "../entidades/Cliente.js";
 import { Chatbot } from "../entidades/Chatbot.js";
 import { Conversa } from "../entidades/Conversa.js";
+import { Mensagem } from "../entidades/Mensagem.js";
 import { ServicoDeFila } from "../ServicoDeFila.js";
 import { RepositorioDeFilaEmMemoria } from "../../repositorios/RepositorioDeFilaEmMemoria.js";
 import { CanalSimulado } from "./apoio/CanalSimulado.js";
@@ -61,4 +62,53 @@ test("fila com ticket mostra protocolo, assunto e prioridade", async () => {
     assert.equal(await fluxo.processarSeOperador({ idExterno: "f1", remetente: "5581999999999", enderecoResposta: "op", texto: "fila" }), true);
     assert.match(canal.enviadas[0].texto, new RegExp(ticket.getProtocolo()));
     assert.match(canal.enviadas[0].texto, /Prioridade:/);
+});
+
+test("operador assume por número e recebe o histórico após atribuição", async () => {
+    const cliente = new Cliente(1, "Cliente", "cliente@example.com", "5581888888888");
+    const bot = new Chatbot("wxn", "Bot", "simples", 2, true);
+    const conversa = new Conversa(55, "simulado", cliente, bot);
+    conversa.adicionarMensagem(new Mensagem("Preciso de suporte", new Date("2026-11-06T12:00:00Z"), cliente));
+    const repo = new RepositorioDeFilaEmMemoria([], [operador], [conversa]);
+    const fila = new ServicoDeFila(repo);
+    const ticket = await fila.solicitarAtendimentoHumano(55);
+    const canal = new CanalSimulado();
+    const fluxo = new FluxoDoOperador(canal, fila, [operador], [{ id: 7, telefone: "5581999999999" }]);
+    const msg = (texto: string) => ({ idExterno: `m-${texto}`, remetente: "5581999999999", enderecoResposta: "operador", texto });
+    await fluxo.processarSeOperador(msg("fila"));
+    await fluxo.processarSeOperador(msg("1"));
+    assert.equal(ticket.getStatus(), "EM_ATENDIMENTO");
+    assert.match(canal.enviadas.at(-1)!.texto, /Novo atendimento/);
+    assert.match(canal.enviadas.at(-1)!.texto, new RegExp(ticket.getProtocolo()));
+    assert.match(canal.enviadas.at(-1)!.texto, /Preciso de suporte/);
+});
+
+test("opção sem lista ou fora da lista não assume ticket", async () => {
+    const c = cenario();
+    await c.enviar("5581999999999", "1");
+    assert.match(c.canal.enviadas.at(-1)!.texto, /Envie "fila"/);
+    await c.enviar("5581999999999", "fila");
+    await c.enviar("5581999999999", "2");
+    assert.match(c.canal.enviadas.at(-1)!.texto, /Número inválido|Envie "fila"/);
+});
+
+test("dois operadores com lista antiga não assumem o mesmo ticket", async () => {
+    const outro = new Atendente(8, "Outro", "outro@example.com");
+    const cliente = new Cliente(1, "Cliente", "cliente@example.com", "5581888888888");
+    const bot = new Chatbot("wxn", "Bot", "simples", 2, true);
+    const conversa = new Conversa(56, "simulado", cliente, bot);
+    const repo = new RepositorioDeFilaEmMemoria([], [operador, outro], [conversa]);
+    const fila = new ServicoDeFila(repo);
+    const ticket = await fila.solicitarAtendimentoHumano(56);
+    const canal = new CanalSimulado();
+    const fluxo = new FluxoDoOperador(canal, fila, [operador, outro], [
+        { id: 7, telefone: "5581999999999" }, { id: 8, telefone: "5581977777777" },
+    ]);
+    const enviar = (remetente: string, texto: string) => fluxo.processarSeOperador({ idExterno: `${remetente}-${texto}`, remetente, enderecoResposta: remetente, texto });
+    await enviar("5581999999999", "fila");
+    await enviar("5581977777777", "fila");
+    await enviar("5581999999999", "1");
+    await enviar("5581977777777", "1");
+    assert.equal(ticket.getAtendente()?.getId(), "7");
+    assert.match(canal.enviadas.at(-1)!.texto, /já foi assumida/);
 });

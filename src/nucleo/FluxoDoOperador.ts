@@ -1,6 +1,7 @@
 import type { CanalMensagens, MensagemRecebida } from "./CanalMensagens.js";
 import type { ServicoDeFila } from "./ServicoDeFila.js";
 import type { Atendente } from "./entidades/Atendente.js";
+import { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila.js";
 
 /** Cadastro explícito: nunca deduz permissão a partir de um nome ou de uma mensagem. */
 export interface VinculoOperadorWhatsApp {
@@ -16,11 +17,13 @@ function normalizarTelefone(entrada: string): string | null {
 }
 
 /**
- * Primeira fatia do fluxo do operador: reconhecimento por telefone cadastrado e comando "fila".
+ * Fluxo do operador: reconhecimento, listagem e assunção pelo número exibido.
  * O serviço de domínio continua independente do WhatsApp, e a autenticação HTTP existente é preservada.
  */
 export class FluxoDoOperador {
     private readonly porTelefone = new Map<string, Atendente>();
+    /** Cada operador seleciona sobre a última lista que ele próprio recebeu. */
+    private readonly selecoes = new Map<string, readonly string[]>();
 
     constructor(
         private readonly canal: CanalMensagens,
@@ -45,21 +48,69 @@ export class FluxoDoOperador {
         if (!telefone || !this.porTelefone.has(telefone)) return false;
 
         const comando = mensagem.texto.trim().toLocaleLowerCase("pt-BR");
-        if (comando !== "fila") {
-            await this.canal.enviarTexto(mensagem.enderecoResposta, 'Comando do operador: envie "fila" para consultar os atendimentos pendentes.');
+        if (comando === "fila") {
+            // Apaga lista anterior mesmo em fila vazia; números antigos deixam de ser aceitos.
+            this.selecoes.delete(telefone);
+            const tickets = await this.fila.listarFila();
+            if (tickets.length === 0) {
+                await this.canal.enviarTexto(mensagem.enderecoResposta, "Não há atendimentos aguardando no momento.");
+                return true;
+            }
+            this.selecoes.set(telefone, tickets.map(t => t.getProtocolo()));
+            const linhas = tickets.map((t, i) =>
+                `${i + 1}. Protocolo: ${t.getProtocolo()} | ${t.getAssunto()} | Prioridade: ${t.getPrioridade()}`
+            );
+            await this.canal.enviarTexto(mensagem.enderecoResposta,
+                `Fila de atendimentos (${tickets.length}):\n${linhas.join("\n")}\n\nResponda com o número do atendimento que deseja assumir.`);
             return true;
         }
 
-        const tickets = await this.fila.listarFila();
-        if (tickets.length === 0) {
-            await this.canal.enviarTexto(mensagem.enderecoResposta, "Não há atendimentos aguardando no momento.");
+        if (/^[1-9]\d*$/.test(comando)) {
+            const protocolos = this.selecoes.get(telefone);
+            const indice = Number(comando) - 1;
+            if (!protocolos) {
+                await this.canal.enviarTexto(mensagem.enderecoResposta, 'Envie "fila" antes de escolher um atendimento.');
+                return true;
+            }
+            if (!Number.isSafeInteger(indice) || indice < 0 || indice >= protocolos.length) {
+                await this.canal.enviarTexto(mensagem.enderecoResposta, 'Número inválido. Escolha uma opção da lista ou envie "fila" novamente.');
+                return true;
+            }
+
+            // Consome a seleção para não assumir outro ticket com o mesmo comando repetido.
+            this.selecoes.delete(telefone);
+            const protocolo = protocolos[indice];
+            const atendente = this.porTelefone.get(telefone)!;
+            try {
+                await this.fila.assumirTicket(protocolo, atendente);
+            } catch (erro) {
+                if (erro instanceof TicketIndisponivelError) {
+                    await this.canal.enviarTexto(mensagem.enderecoResposta,
+                        'Essa conversa já foi assumida por outra pessoa da equipe. Envie "fila" para atualizar a lista.');
+                    return true;
+                }
+                if (erro instanceof TicketNaoEncontradoError) {
+                    await this.canal.enviarTexto(mensagem.enderecoResposta,
+                        'Esse atendimento não está mais disponível. Envie "fila" para atualizar a lista.');
+                    return true;
+                }
+                throw erro;
+            }
+
+            // Histórico é recuperado após a atribuição persistida: nada depende de uma cópia antiga da fila.
+            const historico = await this.fila.obterHistoricoDoTicket(protocolo);
+            const linhas = historico.map(m => {
+                const nome = m.getRemetente().getIdentificacao();
+                return `[${m.getDataEnvio().toLocaleString("pt-BR")}] ${nome}: ${m.getTexto()}`;
+            });
+            await this.canal.enviarTexto(mensagem.enderecoResposta,
+                `Novo atendimento — protocolo ${protocolo}\n` +
+                (linhas.length ? `Histórico da conversa:\n${linhas.join("\n")}` : 'A conversa ainda não possui mensagens registradas.'));
             return true;
         }
-        const linhas = tickets.map((t, i) =>
-            `${i + 1}. Protocolo: ${t.getProtocolo()} | ${t.getAssunto()} | Prioridade: ${t.getPrioridade()}`
-        );
+
         await this.canal.enviarTexto(mensagem.enderecoResposta,
-            `Fila de atendimentos (${tickets.length}):\n${linhas.join("\n")}\n\nA opção de assumir pelo número será habilitada na próxima etapa.`);
+            'Comando do operador: envie "fila" para consultar os atendimentos pendentes e responda com o número desejado.');
         return true;
     }
 }
