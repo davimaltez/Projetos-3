@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   }
   try {
     await banco.pool.query(`SELECT t.id, c.criado_em FROM tickets t
-                                                            JOIN conversas c ON c.id = t.conversa_id LIMIT 0`);
+      JOIN conversas c ON c.id = t.conversa_id LIMIT 0`);
   } catch {
     throw new Error("Estrutura da fila indisponível. Execute `npm run db:migrate` e confira o acesso ao banco.");
   }
@@ -91,7 +91,6 @@ async function main(): Promise<void> {
       new EventoRepositorio(banco.pool),
       new ContextoMenuRepositorio(banco.pool),
       classificador,
-      gerador,
       new Menu(topicosDoMenu()),
       {
         confiancaMinima: config.iaConfiancaMinima,
@@ -102,7 +101,8 @@ async function main(): Promise<void> {
         limiteDeMensagens:
             config.limiteMensagensPorMinuto > 0 ? new LimitadorDeTaxa(config.limiteMensagensPorMinuto, UM_MINUTO_MS) : null,
       },
-      fila
+      fila,
+      gerador
   );
   console.log(
       config.limiteMensagensPorMinuto > 0
@@ -126,7 +126,8 @@ async function main(): Promise<void> {
     await banco.encerrar();
     process.exit(0);
   };
-  process.once("SIGINT", () => void encerrar("SIGINT"));  process.once("SIGTERM", () => void encerrar("SIGTERM"));
+  process.once("SIGINT", () => void encerrar("SIGINT"));
+  process.once("SIGTERM", () => void encerrar("SIGTERM"));
 }
 
 main().catch((erro: unknown) => {

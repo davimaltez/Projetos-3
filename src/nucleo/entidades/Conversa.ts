@@ -5,6 +5,7 @@ import type { Chatbot } from "./Chatbot.js";
 import type { Mensagem } from "./Mensagem.js";
 import { Ticket } from "./Ticket.js";
 import { StatusConversa, Prioridade } from "./Enums.js";
+import { PEDIDO_PADRAO, type PedidoDeAtendimento } from "../PedidoDeAtendimento.js";
 
 export interface DadosConversaReconstituida {
     /** Id da linha no banco (SERIAL); vira texto na entidade. */
@@ -132,7 +133,7 @@ export class Conversa {
         this.mensagens.push(msg);
     }
 
-    public transferirParaHumano(): Ticket {
+    public transferirParaHumano(pedido?: PedidoDeAtendimento): Ticket {
         if (this.status === StatusConversa.ENCERRADA) {
             throw new Error(
                 "Nao e possivel transferir uma conversa encerrada."
@@ -144,7 +145,7 @@ export class Conversa {
         }
 
         const protocolo = randomUUID();
-        const assunto = "Atendimento humano";
+        const p = pedido ?? PEDIDO_PADRAO;
 
         const resumoBot = this.mensagens
             .map(m => m.getTexto())
@@ -153,11 +154,13 @@ export class Conversa {
 
         const ticket = new Ticket(
             protocolo,
-            assunto,
-            Prioridade.MEDIA,
+            p.assunto,
+            p.prioridade,
             new Date(),
             resumoBot,
-            this
+            this,
+            p.motivo,
+            p.dados
         );
 
         this.ticket = ticket;

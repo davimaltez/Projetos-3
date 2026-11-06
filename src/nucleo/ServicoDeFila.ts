@@ -3,6 +3,7 @@ import { compararNaFila } from "./OrdemDaFila.js";
 import type { RepositorioDeFila } from "./RepositorioDeFila.js";
 import type { Atendente } from "./entidades/Atendente.js";
 import { StatusTicket } from "./entidades/Enums.js";
+import type { PedidoDeAtendimento } from "./PedidoDeAtendimento.js";
 import type { Mensagem } from "./entidades/Mensagem.js";
 import type { Ticket } from "./entidades/Ticket.js";
 
@@ -13,8 +14,8 @@ export { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila
 export class ServicoDeFila {
   constructor(private readonly repositorio: RepositorioDeFila) {}
 
-  async solicitarAtendimentoHumano(conversaId: number): Promise<Ticket> {
-    return this.repositorio.enfileirar(conversaId);
+  async solicitarAtendimentoHumano(conversaId: number, pedido?: PedidoDeAtendimento): Promise<Ticket> {
+    return this.repositorio.enfileirar(conversaId, pedido);
   }
 
   async obterAtendimentoHumano(conversaId: number): Promise<Ticket | null> {

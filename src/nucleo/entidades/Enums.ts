@@ -44,3 +44,13 @@ export enum TipoAtendimento {
   SIMPLIFICADO = "SIMPLIFICADO",
   PERSONALIZADO = "PERSONALIZADO",
 }
+
+
+/** Por que a conversa foi para a fila de atendimento humano (história 2.1). Aparece no cartão da fila. */
+export enum MotivoDaTransferencia {
+  PEDIDO_DO_CLIENTE = "PEDIDO_DO_CLIENTE",
+  PERGUNTA_SEM_RESPOSTA = "PERGUNTA_SEM_RESPOSTA",
+  FALHAS_SEGUIDAS = "FALHAS_SEGUIDAS",
+  /** Reservado: depende da consulta de demanda, que ainda não existe. */
+  DEMANDA_NAO_ENCONTRADA = "DEMANDA_NAO_ENCONTRADA",
+}

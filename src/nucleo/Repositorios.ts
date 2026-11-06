@@ -6,10 +6,26 @@
  * um objeto) em memória que cumpra a mesma interface.
  */
 import type { TrocaDeConversa } from "./GeradorDeResposta.js";
+import type { MotivoDaTransferencia, PrioridadeTicket } from "./entidades/Enums.js";
+
+export interface TransferenciaPendente {
+  readonly motivo: MotivoDaTransferencia;
+  readonly assunto: string;
+  readonly prioridade: PrioridadeTicket;
+  readonly dados: Readonly<Record<string, unknown>>;
+}
+
+export interface DadosDoCliente {
+  readonly nome: string | null;
+  readonly empresa: string | null;
+  readonly telefone?: string;
+}
 
 export interface RepositorioDeClientes {
   /** Devolve o id do cliente com esse identificador (telefone, ou LID quando não há telefone); cria se não existir. */
   obterOuCriar(identificador: string, origem: string, enderecoResposta?: string): Promise<number>;
+  /** Consulta os dados do cliente para preencher o pedido de transferência. */
+  obterPorId?(id: number): Promise<DadosDoCliente | null>;
 }
 
 export interface RepositorioDeConversas {
@@ -51,10 +67,13 @@ export interface EstadoDoMenu {
   readonly perguntando: boolean;
   /** Últimas perguntas e respostas do modo pergunta (vazio fora dele). */
   readonly historico: readonly TrocaDeConversa[];
+  readonly falhasSeguidas?: number;
+  readonly transferenciaPendente?: TransferenciaPendente | null;
 }
 
 export interface RepositorioDeContextoDoMenu {
   /** Estado atual. Vazio (menu principal) se não houver ou se tiver expirado. */
   obter(conversaId: number): Promise<EstadoDoMenu>;
   salvar(conversaId: number, estado: EstadoDoMenu): Promise<void>;
+  obterEmpresa?(conversaId: number): Promise<string | null>;
 }

@@ -26,6 +26,7 @@ export function rotasDaFila(fila: ServicoDeFila, autenticador: AutenticadorDeOpe
       protocolo: ticket.getProtocolo(), assunto: ticket.getAssunto(), prioridade: ticket.getPrioridade(),
       status: ticket.getStatus(), abertoEm: ticket.getDataAbertura(), conversaId: ticket.getConversa().getId(),
       resumoBot: ticket.getResumoBot(),
+      motivo: ticket.getMotivo(), dados: ticket.getDados(),
     })))).catch(next);
   });
 

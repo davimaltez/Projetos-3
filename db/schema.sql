@@ -126,3 +126,9 @@ CREATE INDEX idx_mensagens_conversa_historico
   ON mensagens (conversa_id, criado_em, id);
 
 COMMIT;
+
+-- Etapa 4: história 2.1 (motivo da transferência e dados já informados no ticket).
+ALTER TABLE tickets
+  ADD COLUMN IF NOT EXISTS motivo text NOT NULL DEFAULT 'PEDIDO_DO_CLIENTE'
+    CHECK (motivo IN ('PEDIDO_DO_CLIENTE', 'PERGUNTA_SEM_RESPOSTA', 'FALHAS_SEGUIDAS', 'DEMANDA_NAO_ENCONTRADA')),
+  ADD COLUMN IF NOT EXISTS dados jsonb NOT NULL DEFAULT '{}'::jsonb;

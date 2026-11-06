@@ -4,15 +4,18 @@ import type { GeradorDeResposta, TrocaDeConversa } from "./GeradorDeResposta.js"
 import type { LimitadorDeTaxa } from "./LimitadorDeTaxa.js";
 import type { Menu, Selecao } from "./Menu.js";
 import type { ServicoDeFila } from "./ServicoDeFila.js";
-import { StatusTicket } from "./entidades/Enums.js";
+import { MotivoDaTransferencia, PrioridadeTicket, StatusTicket } from "./entidades/Enums.js";
+import { ASSUNTO_PADRAO, type PedidoDeAtendimento } from "./PedidoDeAtendimento.js";
 import { mascararRemetente, resumirTextoParaLog } from "./PrivacidadeDeLog.js";
 import type {
+  DadosDoCliente,
   EstadoDoMenu,
   RepositorioDeClientes,
   RepositorioDeContextoDoMenu,
   RepositorioDeConversas,
   RepositorioDeEventos,
   RepositorioDeMensagens,
+  TransferenciaPendente,
 } from "./Repositorios.js";
 import { TOPICOS, topicosAtivos, type Topico } from "./Topicos.js";
 
@@ -42,10 +45,24 @@ interface Decisao {
   perguntando: boolean;
   /** Últimas perguntas e respostas do modo pergunta (vazio fora dele). */
   historico: readonly TrocaDeConversa[];
+  /** Contagem de mensagens consecutivas não reconhecidas após esta decisão. */
+  falhasSeguidas: number;
+  /** Proposta de transferência aguardando confirmação (sim/não) do cliente. */
+  transferenciaPendente: TransferenciaPendente | null;
+  /** Pedido pronto para criação do ticket (quando confirmado ou pedido explícito). */
+  solicitarPedido: PedidoDeAtendimento | null;
 }
 
 /** Valores das decisões sem IA e fora do modo pergunta. */
-const PADRAO = { confianca: null, latenciaIaMs: null, perguntando: false, historico: [] } as const;
+const PADRAO = {
+  confianca: null,
+  latenciaIaMs: null,
+  perguntando: false,
+  historico: [],
+  falhasSeguidas: 0,
+  transferenciaPendente: null,
+  solicitarPedido: null,
+} as const;
 
 /** Ajustes do atendimento, montados no app.ts. */
 export interface OpcoesDeAtendimento {
@@ -75,6 +92,35 @@ const RODAPE_PERGUNTA = "Pode escrever outra dúvida ou digitar 0 para voltar ao
 /** Quantas trocas o gerador enxerga, para entender "e se der erro de novo?". */
 const MAX_TROCAS = 3;
 
+// Mensagens da confirmação de atendimento humano (história 2.1)
+const TEXTO_CONFIRMAR_TRANSFERENCIA_FALHAS =
+    "Não consegui entender sua solicitação. Deseja falar com um atendente humano? Digite Sim ou Não (ou 1 para Sim / 2 para Não).";
+const TEXTO_CONFIRMAR_TRANSFERENCIA_PERGUNTA =
+    "Não encontrei essa informação no nosso manual. Deseja falar com um atendente humano? Digite Sim ou Não (ou 1 para Sim / 2 para Não).";
+const TEXTO_RESPOSTA_AMBIGUA_CONFIRMACAO =
+    "Por favor, responda apenas Sim ou Não (ou 1 para Sim / 2 para Não): você deseja falar com um atendente humano?";
+const TEXTO_RECUSA_TRANSFERENCIA = "Tudo bem! Vamos continuar por aqui.";
+
+function normalizarTexto(texto: string): string {
+  return texto
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+}
+
+function ehConfirmacaoSim(texto: string): boolean {
+  const norm = normalizarTexto(texto);
+  return /^(?:sim|s|1|quero|por favor|com certeza|claro|pode ser|positivo)$/.test(norm);
+}
+
+function ehConfirmacaoNao(texto: string): boolean {
+  const norm = normalizarTexto(texto);
+  return /^(?:nao|n|2|0|cancelar|voltar|sair|negativo)$/.test(norm);
+}
+
 /**
  * Regra de atendimento. Não sabe o que é Baileys, Gemini nem Postgres: conversa com
  * um CanalMensagens, com os repositórios (interfaces de Repositorios.ts) e, se houver, com
@@ -101,10 +147,10 @@ export class Atendimento {
       private readonly eventos: RepositorioDeEventos,
       private readonly contextoMenu: RepositorioDeContextoDoMenu,
       private readonly classificador: ClassificadorDeIntencao | null,
-      private readonly gerador: GeradorDeResposta | null,
       private readonly menu: Menu,
       private readonly opcoes: OpcoesDeAtendimento,
-      private readonly fila: ServicoDeFila
+      private readonly fila: ServicoDeFila,
+      private readonly gerador: GeradorDeResposta | null = null
   ) {}
 
   async processar(mensagem: MensagemRecebida): Promise<void> {
@@ -133,7 +179,7 @@ export class Atendimento {
   private async atender(mensagem: MensagemRecebida): Promise<void> {
     const registro = await this.gravarEntrada(mensagem);
     if (registro === null) return; // já processada (respondida e gravada): não responder de novo
-    const { conversaId, entradaId } = registro;
+    const { conversaId, entradaId, clienteId } = registro;
 
     // História 1.1: em que nível do menu o cliente está e se está no modo pergunta.
     const estadoAnterior = await this.estadoAtual(conversaId);
@@ -141,6 +187,23 @@ export class Atendimento {
     // Durante a espera/atendimento, registra novas entradas para o operador, sem menu ou IA.
     // Um pedido explícito repetido recebe o mesmo protocolo, inclusive após falha de envio.
     if (humano && !this.pedidoExplicitoDeHumano(mensagem.texto, estadoAnterior.caminho)) {
+      if (estadoAnterior.transferenciaPendente && ehConfirmacaoSim(mensagem.texto)) {
+        // Se por falha anterior o ticket já foi criado no banco, mas a pendência ainda constava no estado
+        const resposta = humano.getStatus() === StatusTicket.EM_ATENDIMENTO
+            ? `Seu atendimento já está com a equipe. Protocolo: ${humano.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
+            : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${humano.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`;
+        await this.guardarEstado(conversaId, estadoAnterior, {
+          caminho: [],
+          perguntando: false,
+          historico: [],
+          falhasSeguidas: 0,
+          transferenciaPendente: null,
+        });
+        const saidaId = await this.canal.enviarTexto(mensagem.enderecoResposta, resposta);
+        await this.mensagens.registrarSaida(conversaId, saidaId, resposta);
+        await this.mensagens.marcarProcessada(entradaId);
+        return;
+      }
       await this.mensagens.marcarProcessada(entradaId);
       return;
     }
@@ -148,9 +211,20 @@ export class Atendimento {
     // História 1.6: "digitando..." desde o início do processamento, inclusive enquanto a IA pensa.
     await this.canal.indicarDigitando(mensagem.enderecoResposta);
 
-    const decisao = await this.decidir(mensagem.texto, estadoAnterior);
-    const ticket = decisao.topico?.id === "atendimento_humano"
-        ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId)) : null;
+    const clienteDados = this.clientes.obterPorId ? await this.clientes.obterPorId(clienteId) : null;
+    const empresaContexto = this.contextoMenu.obterEmpresa ? await this.contextoMenu.obterEmpresa(conversaId) : null;
+    const clienteInfo: DadosDoCliente = {
+      nome: clienteDados?.nome ?? mensagem.remetente,
+      empresa: clienteDados?.empresa ?? empresaContexto ?? null,
+      telefone: clienteDados?.telefone ?? mensagem.remetente,
+    };
+
+    const decisao = await this.decidir(mensagem.texto, estadoAnterior, clienteInfo);
+    const ticket = decisao.solicitarPedido
+        ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId, decisao.solicitarPedido!))
+        : decisao.topico?.id === "atendimento_humano"
+            ? await this.operarFila(mensagem, () => this.fila.solicitarAtendimentoHumano(conversaId))
+            : null;
     const resposta = ticket
         ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
             ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
@@ -174,6 +248,8 @@ export class Atendimento {
       caminho: decisao.caminhoMenu,
       perguntando: decisao.perguntando,
       historico: decisao.historico,
+      falhasSeguidas: decisao.falhasSeguidas,
+      transferenciaPendente: decisao.transferenciaPendente,
     });
     await this.mensagens.registrarSaida(conversaId, saidaId, resposta);
     await this.eventos.registrar({
@@ -191,6 +267,8 @@ export class Atendimento {
         gerador: this.gerador?.nome ?? null,
         caminhoMenu: decisao.caminhoMenu, // nível do menu depois desta resposta
         perguntando: decisao.perguntando, // true = continua no modo pergunta
+        falhasSeguidas: decisao.falhasSeguidas,
+        transferenciaPendente: decisao.transferenciaPendente !== null,
       },
     });
     await this.mensagens.marcarProcessada(entradaId);
@@ -205,12 +283,14 @@ export class Atendimento {
    * adiante (o canal registra no log). Falhas DEPOIS do envio não geram aviso: o cliente
    * já foi respondido.
    */
-  private async gravarEntrada(mensagem: MensagemRecebida): Promise<{ conversaId: number; entradaId: number } | null> {
+  private async gravarEntrada(
+      mensagem: MensagemRecebida
+  ): Promise<{ conversaId: number; entradaId: number; clienteId: number } | null> {
     try {
       const clienteId = await this.clientes.obterOuCriar(mensagem.remetente, this.canal.nome, mensagem.enderecoResposta);
       const conversaId = await this.conversas.obterOuCriarAtual(clienteId);
       const entradaId = await this.mensagens.registrarEntrada(conversaId, mensagem.idExterno, mensagem.texto);
-      return entradaId === null ? null : { conversaId, entradaId };
+      return entradaId === null ? null : { conversaId, entradaId, clienteId };
     } catch (erro) {
       await this.avisar(mensagem, this.opcoes.avisosDeInstabilidade, TEXTO_DE_INSTABILIDADE);
       throw erro;
@@ -248,12 +328,87 @@ export class Atendimento {
     return this.menu.texto();
   }
 
-  private async decidir(texto: string, estado: EstadoDoMenu): Promise<Decisao> {
+  private async decidir(texto: string, estado: EstadoDoMenu, clienteInfo: DadosDoCliente): Promise<Decisao> {
+    // 0. Confirmação pendente de transferência para humano:
+    // Avaliada primeiro, antes de qualquer navegação de menu ou IA.
+    if (estado.transferenciaPendente) {
+      if (ehConfirmacaoSim(texto)) {
+        const pedido: PedidoDeAtendimento = {
+          assunto: estado.transferenciaPendente.assunto,
+          prioridade: estado.transferenciaPendente.prioridade,
+          motivo: estado.transferenciaPendente.motivo,
+          dados: estado.transferenciaPendente.dados,
+        };
+        const topicoHumano = TOPICOS.find((t) => t.id === "atendimento_humano") ?? null;
+        return {
+          ...PADRAO,
+          topico: topicoHumano,
+          origem: "menu",
+          texto: null,
+          caminhoMenu: [],
+          perguntando: false,
+          falhasSeguidas: 0,
+          transferenciaPendente: null,
+          solicitarPedido: pedido,
+        };
+      }
+
+      if (ehConfirmacaoNao(texto)) {
+        return {
+          ...PADRAO,
+          topico: null,
+          origem: "menu",
+          texto: `${TEXTO_RECUSA_TRANSFERENCIA}\n\n${this.menu.texto()}`,
+          caminhoMenu: [],
+          perguntando: false,
+          falhasSeguidas: 0,
+          transferenciaPendente: null,
+          solicitarPedido: null,
+        };
+      }
+
+      // Resposta ambígua: reforça a pergunta mantendo a pendência ativa
+      return {
+        ...PADRAO,
+        topico: null,
+        origem: "menu",
+        texto: TEXTO_RESPOSTA_AMBIGUA_CONFIRMACAO,
+        caminhoMenu: [...estado.caminho],
+        perguntando: estado.perguntando,
+        historico: estado.historico,
+        falhasSeguidas: estado.falhasSeguidas ?? 0,
+        transferenciaPendente: estado.transferenciaPendente,
+        solicitarPedido: null,
+      };
+    }
+
     // 0a) Pedido explícito de atendente ("atendente", "humano", "falar com uma pessoa"):
     //     vale em qualquer ponto, inclusive dentro do modo pergunta. O ticket é criado no atender().
     const topicoHumano = TOPICOS.find((t) => t.id === "atendimento_humano");
     if (topicoHumano && this.comandoDeHumano(texto)) {
-      return { ...PADRAO, topico: topicoHumano, origem: "menu", texto: null, caminhoMenu: [] };
+      const topicoAtual = this.menu.topicoDoCaminho(estado.caminho);
+      const assunto = topicoAtual ? topicoAtual.rotulo : ASSUNTO_PADRAO;
+      const pedido: PedidoDeAtendimento = {
+        assunto,
+        prioridade: PrioridadeTicket.MEDIA,
+        motivo: MotivoDaTransferencia.PEDIDO_DO_CLIENTE,
+        dados: {
+          clienteNome: clienteInfo.nome,
+          empresa: clienteInfo.empresa,
+          solicitacaoDireta: true,
+          caminhoMenu: estado.caminho,
+        },
+      };
+      return {
+        ...PADRAO,
+        topico: topicoHumano,
+        origem: "menu",
+        texto: null,
+        caminhoMenu: [],
+        falhasSeguidas: 0,
+        transferenciaPendente: null,
+        solicitarPedido: pedido,
+      };
     }
 
     // Caminho que não existe mais (o menu mudou depois do deploy) vira o menu principal.
@@ -263,41 +418,140 @@ export class Atendimento {
     //     Qualquer outro número sai do modo e vale como opção do menu (segue abaixo).
     if (estado.perguntando && this.gerador && caminho.length > 0) {
       const numero = this.menu.lerNumero(texto);
-      if (numero === 0 || this.menu.ehPedidoDeVoltar(texto)) return this.mostrarNivel("menu", caminho);
-      if (numero === null) return this.gerarResposta(texto, caminho, estado.historico, this.gerador);
+      if (numero === 0 || this.menu.ehPedidoDeVoltar(texto)) {
+        return { ...this.mostrarNivel("menu", caminho), falhasSeguidas: 0 };
+      }
+      if (numero === null) {
+        return this.gerarResposta(texto, caminho, estado.historico, this.gerador, clienteInfo);
+      }
     }
 
     // 1) Número: NUNCA chama a IA. Vale para o nível do menu em que o cliente está.
     const leitura = this.menu.interpretar(texto, caminho);
     if (leitura.tipo === "invalida") {
-      return { ...PADRAO, topico: null, origem: "menu_invalido", texto: leitura.texto, caminhoMenu: leitura.novoCaminho };
+      const falhas = (estado.falhasSeguidas ?? 0) + 1;
+      if (falhas >= 2) {
+        const pendente: TransferenciaPendente = {
+          motivo: MotivoDaTransferencia.FALHAS_SEGUIDAS,
+          assunto: "Dificuldade no autoatendimento",
+          prioridade: PrioridadeTicket.ALTA,
+          dados: {
+            clienteNome: clienteInfo.nome,
+            empresa: clienteInfo.empresa,
+            falhasConsecutivas: 2,
+            ultimaTentativa: texto,
+            caminhoMenu: caminho,
+          },
+        };
+        return {
+          ...PADRAO,
+          topico: null,
+          origem: "menu_invalido",
+          texto: TEXTO_CONFIRMAR_TRANSFERENCIA_FALHAS,
+          caminhoMenu: leitura.novoCaminho,
+          falhasSeguidas: 2,
+          transferenciaPendente: pendente,
+        };
+      }
+      return {
+        ...PADRAO,
+        topico: null,
+        origem: "menu_invalido",
+        texto: leitura.texto,
+        caminhoMenu: leitura.novoCaminho,
+        falhasSeguidas: falhas,
+      };
     }
-    if (leitura.tipo !== "livre") return this.decisaoDeSelecao(leitura, "menu");
+    if (leitura.tipo !== "livre") return this.decisaoDeSelecao(leitura, "menu", clienteInfo, estado);
 
     // 2) Texto que corresponde a UMA opção do nível atual: também sem IA.
     const porTexto = this.menu.buscarPorTexto(texto, caminho);
-    if (porTexto) return this.decisaoDeSelecao(porTexto, "menu_texto");
+    if (porTexto) return this.decisaoDeSelecao(porTexto, "menu_texto", clienteInfo, estado);
 
     // 3) Sem IA configurada: mostra o menu do nível atual.
-    if (!this.classificador) return this.mostrarNivel("sem_ia", caminho);
+    if (!this.classificador) {
+      const falhas = (estado.falhasSeguidas ?? 0) + 1;
+      if (falhas >= 2) {
+        const pendente: TransferenciaPendente = {
+          motivo: MotivoDaTransferencia.FALHAS_SEGUIDAS,
+          assunto: "Dificuldade no autoatendimento",
+          prioridade: PrioridadeTicket.ALTA,
+          dados: {
+            clienteNome: clienteInfo.nome,
+            empresa: clienteInfo.empresa,
+            falhasConsecutivas: 2,
+            ultimaTentativa: texto,
+            caminhoMenu: caminho,
+          },
+        };
+        return {
+          ...PADRAO,
+          topico: null,
+          origem: "sem_ia",
+          texto: TEXTO_CONFIRMAR_TRANSFERENCIA_FALHAS,
+          caminhoMenu: [...caminho],
+          falhasSeguidas: 2,
+          transferenciaPendente: pendente,
+        };
+      }
+      return { ...this.mostrarNivel("sem_ia", caminho), falhasSeguidas: falhas };
+    }
 
     // 4) IA. Na raiz escolhe entre os tópicos principais; num sub-menu, só entre as opções daquele nível.
     return caminho.length === 0
-        ? this.classificarTopico(texto, this.classificador)
-        : this.classificarNoNivel(texto, caminho, this.classificador);
+        ? this.classificarTopico(texto, this.classificador, estado, clienteInfo)
+        : this.classificarNoNivel(texto, caminho, this.classificador, estado, clienteInfo);
   }
 
   /** Opção escolhida (por número, texto ou IA): vira a decisão com o texto e o novo estado do menu. */
-  private decisaoDeSelecao(selecao: Selecao, origem: OrigemDecisao): Decisao {
+  private decisaoDeSelecao(
+      selecao: Selecao,
+      origem: OrigemDecisao,
+      clienteInfo: DadosDoCliente,
+      estado: EstadoDoMenu
+  ): Decisao {
     if (selecao.tipo === "perguntar") {
       // Sem gerador (sem chave ou sem manual), a opção avisa em vez de prender o cliente num modo mudo.
       if (!this.gerador) {
         return {
           ...this.mostrarNivel(origem, selecao.novoCaminho),
           texto: `${TEXTO_SEM_GERADOR}\n\n${this.menu.texto(selecao.novoCaminho)}`,
+          falhasSeguidas: 0,
         };
       }
-      return { ...PADRAO, topico: selecao.topico, origem, texto: selecao.texto, caminhoMenu: selecao.novoCaminho, perguntando: true };
+      return {
+        ...PADRAO,
+        topico: selecao.topico,
+        origem,
+        texto: selecao.texto,
+        caminhoMenu: selecao.novoCaminho,
+        perguntando: true,
+        falhasSeguidas: 0,
+      };
+    }
+    if (selecao.topico?.id === "atendimento_humano") {
+      const topicoAtual = this.menu.topicoDoCaminho(estado.caminho);
+      const assunto = topicoAtual ? topicoAtual.rotulo : ASSUNTO_PADRAO;
+      const pedido: PedidoDeAtendimento = {
+        assunto,
+        prioridade: PrioridadeTicket.MEDIA,
+        motivo: MotivoDaTransferencia.PEDIDO_DO_CLIENTE,
+        dados: {
+          clienteNome: clienteInfo.nome,
+          empresa: clienteInfo.empresa,
+          solicitacaoDireta: true,
+          caminhoMenu: estado.caminho,
+        },
+      };
+      return {
+        ...PADRAO,
+        topico: selecao.topico,
+        origem,
+        texto: selecao.texto,
+        caminhoMenu: [],
+        falhasSeguidas: 0,
+        solicitarPedido: pedido,
+      };
     }
     return {
       ...PADRAO,
@@ -305,6 +559,7 @@ export class Atendimento {
       origem,
       texto: selecao.texto,
       caminhoMenu: selecao.tipo === "navegacao" ? selecao.novoCaminho : [],
+      falhasSeguidas: 0,
     };
   }
 
@@ -318,7 +573,8 @@ export class Atendimento {
       texto: string,
       caminho: readonly string[],
       historico: readonly TrocaDeConversa[],
-      gerador: GeradorDeResposta
+      gerador: GeradorDeResposta,
+      clienteInfo: DadosDoCliente
   ): Promise<Decisao> {
     const base = {
       ...PADRAO,
@@ -340,9 +596,34 @@ export class Atendimento {
           latenciaIaMs,
           texto: `${resposta}\n\n${RODAPE_PERGUNTA}`,
           historico: [...historico, troca].slice(-MAX_TROCAS),
+          falhasSeguidas: 0,
         };
       }
-      return { ...base, origem: "ia_sem_resposta", latenciaIaMs, texto: `${TEXTO_NAO_ENCONTRADO}\n\n${RODAPE_PERGUNTA}` };
+
+      // Pergunta sem resposta no manual: propõe transferência com confirmação do cliente
+      const topicoAtual = this.menu.topicoDoCaminho(caminho);
+      const rotulo = topicoAtual ? topicoAtual.rotulo : "Dúvida sobre o sistema";
+      const pendente: TransferenciaPendente = {
+        motivo: MotivoDaTransferencia.PERGUNTA_SEM_RESPOSTA,
+        assunto: `${rotulo} - Pergunta sem resposta`,
+        prioridade: PrioridadeTicket.MEDIA,
+        dados: {
+          clienteNome: clienteInfo.nome,
+          empresa: clienteInfo.empresa,
+          topico: topicoAtual?.id ?? "operacao_sistema",
+          ultimaPergunta: texto,
+          historicoPerguntas: historico,
+        },
+      };
+
+      return {
+        ...base,
+        origem: "ia_sem_resposta",
+        latenciaIaMs,
+        texto: TEXTO_CONFIRMAR_TRANSFERENCIA_PERGUNTA,
+        falhasSeguidas: 0,
+        transferenciaPendente: pendente,
+      };
     } catch (erro) {
       console.error("[atendimento] gerador falhou:", erro instanceof Error ? erro.message : erro);
       return {
@@ -350,12 +631,18 @@ export class Atendimento {
         origem: "ia_gerada_falhou",
         latenciaIaMs: Date.now() - inicio,
         texto: `${TEXTO_FALHA_GERADOR}\n\n${RODAPE_PERGUNTA}`,
+        falhasSeguidas: 0,
       };
     }
   }
 
   /** Menu principal: a IA escolhe entre os tópicos principais. */
-  private async classificarTopico(texto: string, classificador: ClassificadorDeIntencao): Promise<Decisao> {
+  private async classificarTopico(
+      texto: string,
+      classificador: ClassificadorDeIntencao,
+      estado: EstadoDoMenu,
+      clienteInfo: DadosDoCliente
+  ): Promise<Decisao> {
     const inicio = Date.now();
     try {
       const { topico, confianca } = await classificador.classificar(texto, topicosAtivos());
@@ -363,6 +650,30 @@ export class Atendimento {
       const encontrado = TOPICOS.find((t) => t.id === topico && t.ativo) ?? null;
 
       if (encontrado && confianca >= this.opcoes.confiancaMinima) {
+        if (encontrado.id === "atendimento_humano") {
+          const pedido: PedidoDeAtendimento = {
+            assunto: ASSUNTO_PADRAO,
+            prioridade: PrioridadeTicket.MEDIA,
+            motivo: MotivoDaTransferencia.PEDIDO_DO_CLIENTE,
+            dados: {
+              clienteNome: clienteInfo.nome,
+              empresa: clienteInfo.empresa,
+              solicitacaoDireta: true,
+              caminhoMenu: [],
+            },
+          };
+          return {
+            ...PADRAO,
+            topico: encontrado,
+            origem: "ia",
+            confianca,
+            latenciaIaMs,
+            texto: null,
+            caminhoMenu: [],
+            falhasSeguidas: 0,
+            solicitarPedido: pedido,
+          };
+        }
         // Tópico com sub-menu: abre o sub-menu em vez de mandar o texto provisório.
         const submenu = this.menu.abrirTopico(encontrado);
         return {
@@ -373,13 +684,42 @@ export class Atendimento {
           latenciaIaMs,
           texto: submenu?.texto ?? null,
           caminhoMenu: submenu?.novoCaminho ?? [],
+          falhasSeguidas: 0,
         };
       }
-      return { ...this.mostrarNivel("ia_incerta", []), confianca, latenciaIaMs };
+
+      // IA incerta: não reconheceu com confiança mínima
+      const falhas = (estado.falhasSeguidas ?? 0) + 1;
+      if (falhas >= 2) {
+        const pendente: TransferenciaPendente = {
+          motivo: MotivoDaTransferencia.FALHAS_SEGUIDAS,
+          assunto: "Dificuldade no autoatendimento",
+          prioridade: PrioridadeTicket.ALTA,
+          dados: {
+            clienteNome: clienteInfo.nome,
+            empresa: clienteInfo.empresa,
+            falhasConsecutivas: 2,
+            ultimaTentativa: texto,
+            caminhoMenu: [],
+          },
+        };
+        return {
+          ...PADRAO,
+          topico: null,
+          origem: "ia_incerta",
+          confianca,
+          latenciaIaMs,
+          texto: TEXTO_CONFIRMAR_TRANSFERENCIA_FALHAS,
+          caminhoMenu: [],
+          falhasSeguidas: 2,
+          transferenciaPendente: pendente,
+        };
+      }
+      return { ...this.mostrarNivel("ia_incerta", []), confianca, latenciaIaMs, falhasSeguidas: falhas };
     } catch (erro) {
-      // Degrada para o menu em vez de deixar o cliente sem resposta.
+      // Degrada para o menu em vez de deixar o cliente sem resposta (falha técnica da IA não incrementa falhas)
       console.error("[atendimento] classificador falhou, exibindo menu:", erro instanceof Error ? erro.message : erro);
-      return { ...this.mostrarNivel("ia_falhou", []), latenciaIaMs: Date.now() - inicio };
+      return { ...this.mostrarNivel("ia_falhou", []), latenciaIaMs: Date.now() - inicio, falhasSeguidas: estado.falhasSeguidas ?? 0 };
     }
   }
 
@@ -387,7 +727,9 @@ export class Atendimento {
   private async classificarNoNivel(
       texto: string,
       caminho: readonly string[],
-      classificador: ClassificadorDeIntencao
+      classificador: ClassificadorDeIntencao,
+      estado: EstadoDoMenu,
+      clienteInfo: DadosDoCliente
   ): Promise<Decisao> {
     const inicio = Date.now();
     try {
@@ -397,14 +739,42 @@ export class Atendimento {
 
       // O cliente já escreveu a dúvida e a IA mandou para "Outra dúvida": responde agora, sem pedir de novo.
       if (selecao?.tipo === "perguntar" && this.gerador) {
-        const resposta = await this.gerarResposta(texto, selecao.novoCaminho, [], this.gerador);
+        const resposta = await this.gerarResposta(texto, selecao.novoCaminho, [], this.gerador, clienteInfo);
         return { ...resposta, confianca, latenciaIaMs: latenciaIaMs + (resposta.latenciaIaMs ?? 0) };
       }
-      if (selecao) return { ...this.decisaoDeSelecao(selecao, "ia"), confianca, latenciaIaMs };
-      return { ...this.mostrarNivel("ia_incerta", caminho), confianca, latenciaIaMs };
+      if (selecao) return { ...this.decisaoDeSelecao(selecao, "ia", clienteInfo, estado), confianca, latenciaIaMs };
+
+      // IA incerta dentro do sub-menu
+      const falhas = (estado.falhasSeguidas ?? 0) + 1;
+      if (falhas >= 2) {
+        const pendente: TransferenciaPendente = {
+          motivo: MotivoDaTransferencia.FALHAS_SEGUIDAS,
+          assunto: "Dificuldade no autoatendimento",
+          prioridade: PrioridadeTicket.ALTA,
+          dados: {
+            clienteNome: clienteInfo.nome,
+            empresa: clienteInfo.empresa,
+            falhasConsecutivas: 2,
+            ultimaTentativa: texto,
+            caminhoMenu: caminho,
+          },
+        };
+        return {
+          ...PADRAO,
+          topico: null,
+          origem: "ia_incerta",
+          confianca,
+          latenciaIaMs,
+          texto: TEXTO_CONFIRMAR_TRANSFERENCIA_FALHAS,
+          caminhoMenu: [...caminho],
+          falhasSeguidas: 2,
+          transferenciaPendente: pendente,
+        };
+      }
+      return { ...this.mostrarNivel("ia_incerta", caminho), confianca, latenciaIaMs, falhasSeguidas: falhas };
     } catch (erro) {
       console.error("[atendimento] classificador falhou, exibindo o menu do nível:", erro instanceof Error ? erro.message : erro);
-      return { ...this.mostrarNivel("ia_falhou", caminho), latenciaIaMs: Date.now() - inicio };
+      return { ...this.mostrarNivel("ia_falhou", caminho), latenciaIaMs: Date.now() - inicio, falhasSeguidas: estado.falhasSeguidas ?? 0 };
     }
   }
 
@@ -434,7 +804,7 @@ export class Atendimento {
     try {
       return await this.contextoMenu.obter(conversaId);
     } catch {
-      return { caminho: [], perguntando: false, historico: [] };
+      return { caminho: [], perguntando: false, historico: [], falhasSeguidas: 0, transferenciaPendente: null };
     }
   }
 
@@ -445,10 +815,12 @@ export class Atendimento {
   private async guardarEstado(conversaId: number, anterior: EstadoDoMenu, novo: EstadoDoMenu): Promise<void> {
     const igual =
         anterior.perguntando === novo.perguntando &&
+        anterior.falhasSeguidas === novo.falhasSeguidas &&
+        anterior.transferenciaPendente === novo.transferenciaPendente &&
         anterior.historico.length === novo.historico.length &&
         anterior.caminho.length === novo.caminho.length &&
         anterior.caminho.every((id, i) => id === novo.caminho[i]);
-    if (igual && !novo.perguntando) return;
+    if (igual && !novo.perguntando && !novo.transferenciaPendente) return;
 
     try {
       await this.contextoMenu.salvar(conversaId, novo);
