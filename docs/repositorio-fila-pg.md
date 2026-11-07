@@ -1,9 +1,17 @@
 # Etapa 4 — RepositorioDeFilaPg
 
-O adaptador recebe o `pg.Pool` existente. Não altera schema, serviço, interface,
-cadastro de operadores ou montagem da aplicação.
+O adaptador recebe o `pg.Pool` existente e é compartilhado entre Atendimento e
+HTTP por meio do ServicoDeFila criado em app.ts. O cadastro dos operadores HTTP
+é realizado por AtendenteRepositorio antes de expor as rotas. Ver
+[fluxo integrado](servico-de-fila.md) e o comando `npm run db:migrate`.
 
-## Operações (interface do plano da Dupla 3)
+## Operações (contrato da equipe ampliado para integração)
+
+- `enfileirar(conversaId)`: bloqueia a conversa, reutiliza seu ticket ou cria
+  um único ticket com resumo, atualiza o estado da conversa e registra o evento
+  na mesma transação. A restrição UNIQUE por conversa também protege a criação.
+- `buscarPorConversa(conversaId)`: retorna o ticket associado, inclusive encerrado;
+  o serviço distingue atendimento ativo de histórico.
 
 - `listarAguardando()`: só tickets `AGUARDANDO`, filtrados e ordenados **no SQL**
   por prioridade (`URGENTE`, `ALTA`, `MEDIA`, `BAIXA`), data de abertura e id. A
@@ -21,7 +29,8 @@ Erros (definidos em `src/nucleo/ErrosDaFila.ts`): ticket inexistente gera
 `TicketNaoEncontradoError`; ticket fora de `AGUARDANDO` gera
 `TicketIndisponivelError`; atendente fora da tabela `atendentes` (ou id que não é
 número) gera `AtendenteNaoCadastradoError`. Em todos os casos nada é alterado.
-O método não muda disponibilidade do atendente nem estado da conversa.
+O método preserva a disponibilidade do atendente e atualiza o estado da conversa
+para EM_ATENDIMENTO, registrando a assunção na mesma transação.
 Como o plano passa só o id, a conferência de nome/e-mail do atendente foi
 retirada. Essa verificação não autentica o operador; autenticação permanece na
 camada chamadora.
@@ -58,13 +67,13 @@ Nenhum teste anterior foi alterado.
 
 Campos ausentes:
 
-- Canal, início/fim da conversa e chatbot ficam null. atualizado_em, data do
+- Canal, fim da conversa e chatbot ficam null quando não persistidos. atualizado_em, data do
   ticket ou primeira mensagem não são tratados como datas reais da conversa.
 - O cliente conserva seu ID e nome disponível; e-mail fica null. Não se criam
-  endereços fictícios nem se usa telefone como nome.
-- Entrada identifica o cliente vinculado à conversa. Saídas ficam com remetente
-  null: não se presume bot nem responsável atual do ticket.
-- Texto SQL NULL é distinto de texto vazio. Mensagem mantém o ID e a direção
+  endereços fictícios; o telefone é o nome de apresentação quando não há nome cadastrado.
+- Entrada identifica o cliente vinculado à conversa. Saídas identificam o bot,
+  pois somente ele grava saídas nesta integração; não se atribui o histórico ao operador atual.
+- Texto SQL NULL é apresentado como texto vazio na entidade. Mensagem mantém o ID e a direção
   originais, acessíveis pelos novos getters getId()/getDirecao().
 - Intenção vem do evento real mais recente do tipo resposta, da mesma conversa,
   associado por dados.mensagemId (desempate por eventos.id). Eventos sintéticos
@@ -119,10 +128,11 @@ trigger exclusivamente no schema descartável.
 - Consumidores futuros dos getters históricos precisam tratar null.
 - Não há mecanismo de salvar alterações feitas nos objetos retornados; só a
   atribuição solicitada ao repositório é persistida nesta etapa.
-- Cadastro/IDs, autenticação, disponibilidade dos atendentes, criação/fechamento
-  de tickets e sincronização da conversa continuam sob responsabilidade da equipe.
+- Cadastro das identidades HTTP, autenticação, criação de tickets e sincronização
+  da conversa estão integrados. Disponibilidade, respostas humanas e encerramento
+  persistido por comando ficam para as próximas histórias.
 - Uma conversa encerrada pode ter dataFim desconhecida; null sozinho não indica
   que a conversa continua aberta.
 - Metadados que nunca foram persistidos não podem ser recuperados por este adaptador.
-- O repositório ainda não foi conectado ao app.ts; a integração de produção deve
-  respeitar essas precondições e o pool compartilhado.
+- O repositório é criado em app.ts com o pool compartilhado. As rotas de operador
+  exigem OPERADORES_HTTP_JSON e cadastro das identidades na inicialização.

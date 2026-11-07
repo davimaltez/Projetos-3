@@ -127,8 +127,8 @@ CREATE INDEX idx_mensagens_conversa_historico
 
 COMMIT;
 
--- História 1.3: serviços contratados. Bancos existentes: migração 003
--- (db/migrations/003_servico_contratado.sql, ver docs/migracao-servico-contratado.md).
+-- História 1.3: serviços contratados. Bancos existentes: migração 006
+-- (db/migrations/006_servico_contratado.sql, ver docs/migracao-servico-contratado.md).
 CREATE TABLE IF NOT EXISTS servicos_contratados (
   id SERIAL CONSTRAINT servicos_contratados_pkey PRIMARY KEY,
   cliente_id INTEGER NOT NULL,
@@ -148,3 +148,9 @@ CREATE TABLE IF NOT EXISTS servicos_contratados (
 -- Consulta do bot: serviços ativos de um cliente.
 CREATE INDEX IF NOT EXISTS idx_servicos_cliente_ativos
   ON servicos_contratados (cliente_id) WHERE ativo;
+
+-- Etapa 4: história 2.1 (motivo da transferência e dados já informados no ticket).
+ALTER TABLE tickets
+  ADD COLUMN IF NOT EXISTS motivo text NOT NULL DEFAULT 'PEDIDO_DO_CLIENTE'
+    CHECK (motivo IN ('PEDIDO_DO_CLIENTE', 'PERGUNTA_SEM_RESPOSTA', 'FALHAS_SEGUIDAS', 'DEMANDA_NAO_ENCONTRADA')),
+  ADD COLUMN IF NOT EXISTS dados jsonb NOT NULL DEFAULT '{}'::jsonb;

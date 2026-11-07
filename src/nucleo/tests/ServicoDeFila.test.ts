@@ -154,9 +154,15 @@ describe("ServicoDeFila.assumirTicket", () => {
   test("recusa quando o repositório detecta disputa após uma leitura que ainda mostrava AGUARDANDO", async () => {
     const leituraAnterior = criarTicket("disputado");
     const repositorio: RepositorioDeFila = {
+      enfileirar: async () => leituraAnterior,
+      buscarPorConversa: async () => leituraAnterior,
       listarAguardando: async () => [leituraAnterior],
       buscarPorId: async () => leituraAnterior,
       atribuirAtendente: async (id) => { throw new TicketIndisponivelError(id); },
+      buscarEmAtendimentoPorAtendente: async () => null,
+      obterDestinoDoCliente: async () => null,
+      registrarRespostaDoAtendente: async () => {},
+      encerrarTicket: async () => {},
     };
 
     await assert.rejects(new ServicoDeFila(repositorio).assumirTicket("disputado", ana), TicketIndisponivelError);
@@ -211,6 +217,15 @@ describe("ServicoDeFila.obterHistoricoDoTicket", () => {
 });
 
 describe("RepositorioDeFilaEmMemoria", () => {
+  test("enfileira conversa uma vez mesmo com pedidos simultâneos e exige conversa existente", async () => {
+    const conversa = criarTicket("base").getConversa();
+    const repositorio = new RepositorioDeFilaEmMemoria([], [ana], [conversa]);
+    const servico = new ServicoDeFila(repositorio);
+    const tickets = await Promise.all([servico.solicitarAtendimentoHumano(1), servico.solicitarAtendimentoHumano(1)]);
+    assert.equal(tickets[0], tickets[1]);
+    assert.equal((await servico.listarFila()).length, 1);
+    await assert.rejects(servico.solicitarAtendimentoHumano(999), /Conversa não encontrada/);
+  });
   test("as listas de entrada e de saída não permitem remover tickets do armazenamento", async () => {
     const ticket = criarTicket("armazenado");
     const entrada = [ticket];
@@ -225,8 +240,8 @@ describe("RepositorioDeFilaEmMemoria", () => {
 
   test("recusa protocolos duplicados para evitar atribuição ambígua", () => {
     assert.throws(
-      () => new RepositorioDeFilaEmMemoria([criarTicket("repetido"), criarTicket("repetido")]),
-      /protocolos duplicados/,
+        () => new RepositorioDeFilaEmMemoria([criarTicket("repetido"), criarTicket("repetido")]),
+        /protocolos duplicados/,
     );
   });
 
@@ -247,8 +262,8 @@ describe("RepositorioDeFilaEmMemoria", () => {
     const ocupado = criarTicket("ocupado", Prioridade.URGENTE, 0);
     ocupado.atribuirAtendente(ana);
     assert.deepEqual(
-      (await criarRepositorio([antigo, ocupado, urgente]).listarAguardando()).map((t) => t.getId()),
-      ["urgente", "antigo"],
+        (await criarRepositorio([antigo, ocupado, urgente]).listarAguardando()).map((t) => t.getId()),
+        ["urgente", "antigo"],
     );
   });
 

@@ -7,7 +7,10 @@ import { LimitadorDeTaxa } from "../LimitadorDeTaxa.js";
 import { Menu } from "../Menu.js";
 import type { RepositorioDeServicos, ServicoContratado } from "../RepositorioDeServicos.js";
 import { RespostaDeServicoContratado, type ResolvedorDeResposta } from "../RespostaDeServicoContratado.js";
+import type { EstadoDoMenu } from "../Repositorios.js";
+import { ServicoDeFila } from "../ServicoDeFila.js";
 import { TOPICOS, topicosDoMenu } from "../Topicos.js";
+import { RepositorioDeFilaEmMemoria } from "../../repositorios/RepositorioDeFilaEmMemoria.js";
 
 // Dados fictícios: nenhuma configuração, credencial ou serviço externo é usado.
 const CONVERSA = 10;
@@ -91,19 +94,25 @@ class CanalFalso implements CanalMensagens {
 }
 
 function classificadorQueResponde(classificacao: Classificacao): ClassificadorDeIntencao {
-  return { nome: "falso", classificar: async () => classificacao };
+  return { nome: "falso", classificar: async () => classificacao, escolherOpcao: async () => ({ id: null, confianca: 0 }) };
 }
 
 function criarAtendimento(servicos: RepositorioDeServicos | ResolvedorDeResposta, classificador: ClassificadorDeIntencao | null = null) {
   const canal = new CanalFalso();
   let proximaEntrada = 1;
+  let estado: EstadoDoMenu = { caminho: [], perguntando: false, historico: [], falhasSeguidas: 0, transferenciaPendente: null };
   const atendimento = new Atendimento(
     canal,
     { obterOuCriar: async () => 1 },
     { obterOuCriarAtual: async () => CONVERSA },
     { registrarEntrada: async () => proximaEntrada++, registrarSaida: async () => {}, marcarProcessada: async () => {} },
     { registrar: async () => {} },
-    { obterCaminho: async () => [], salvarCaminho: async () => {} },
+    {
+      obter: async () => estado,
+      salvar: async (_id, novo) => {
+        estado = novo;
+      },
+    },
     classificador,
     menu,
     {
@@ -112,6 +121,8 @@ function criarAtendimento(servicos: RepositorioDeServicos | ResolvedorDeResposta
       avisosDeExcesso: new LimitadorDeTaxa(1, 60_000),
       limiteDeMensagens: null,
     },
+    new ServicoDeFila(new RepositorioDeFilaEmMemoria()),
+    null,
     "responder" in servicos ? servicos : new RespostaDeServicoContratado(servicos, menu)
   );
   return { atendimento, canal };
@@ -136,6 +147,10 @@ describe("Atendimento com o tópico servico_contratado", () => {
       classificar: async () => {
         chamouIa = true;
         return { topico: null, confianca: 0 };
+      },
+      escolherOpcao: async () => {
+        chamouIa = true;
+        return { id: null, confianca: 0 };
       },
     };
     const { atendimento, canal } = criarAtendimento(repositorio([suporte]), ia);

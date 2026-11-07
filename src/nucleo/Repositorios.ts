@@ -5,10 +5,27 @@
  * com o Postgres moram em repositorios/ e as implementam. Nos testes, basta uma classe (ou
  * um objeto) em memória que cumpra a mesma interface.
  */
+import type { TrocaDeConversa } from "./GeradorDeResposta.js";
+import type { MotivoDaTransferencia, PrioridadeTicket } from "./entidades/Enums.js";
+
+export interface TransferenciaPendente {
+  readonly motivo: MotivoDaTransferencia;
+  readonly assunto: string;
+  readonly prioridade: PrioridadeTicket;
+  readonly dados: Readonly<Record<string, unknown>>;
+}
+
+export interface DadosDoCliente {
+  readonly nome: string | null;
+  readonly empresa: string | null;
+  readonly telefone?: string;
+}
 
 export interface RepositorioDeClientes {
   /** Devolve o id do cliente com esse identificador (telefone, ou LID quando não há telefone); cria se não existir. */
-  obterOuCriar(identificador: string, origem: string): Promise<number>;
+  obterOuCriar(identificador: string, origem: string, enderecoResposta?: string): Promise<number>;
+  /** Consulta os dados do cliente para preencher o pedido de transferência. */
+  obterPorId?(id: number): Promise<DadosDoCliente | null>;
 }
 
 export interface RepositorioDeConversas {
@@ -42,8 +59,21 @@ export interface RepositorioDeEventos {
   registrar(evento: NovoEvento): Promise<void>;
 }
 
+/** Onde o cliente está no menu e se está no modo "escreva sua pergunta". */
+export interface EstadoDoMenu {
+  /** Ids do topo até o nível atual. Vazio = menu principal. */
+  readonly caminho: readonly string[];
+  /** true = a próxima mensagem de texto é uma pergunta para o gerador. */
+  readonly perguntando: boolean;
+  /** Últimas perguntas e respostas do modo pergunta (vazio fora dele). */
+  readonly historico: readonly TrocaDeConversa[];
+  readonly falhasSeguidas?: number;
+  readonly transferenciaPendente?: TransferenciaPendente | null;
+}
+
 export interface RepositorioDeContextoDoMenu {
-  /** Ids do topo até o nível atual do menu. Vazio se não houver, se expirou ou se o cliente está no principal. */
-  obterCaminho(conversaId: number): Promise<string[]>;
-  salvarCaminho(conversaId: number, caminho: readonly string[]): Promise<void>;
+  /** Estado atual. Vazio (menu principal) se não houver ou se tiver expirado. */
+  obter(conversaId: number): Promise<EstadoDoMenu>;
+  salvar(conversaId: number, estado: EstadoDoMenu): Promise<void>;
+  obterEmpresa?(conversaId: number): Promise<string | null>;
 }

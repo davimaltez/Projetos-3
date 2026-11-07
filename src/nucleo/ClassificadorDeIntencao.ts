@@ -1,20 +1,27 @@
 import type { IdTopico, Topico } from "./Topicos.js";
 
-/**
- * O que o núcleo precisa de uma IA: dado um texto, dizer a qual tópico ele pertence.
- *
- * A interface mora no NÚCLEO (quem precisa define o contrato), e a implementação
- * com Gemini mora fora, em ia/. Trocar Gemini por outro modelo, ou usar um
- * classificador falso nos testes, não toca no Atendimento.
- */
 export interface Classificacao {
-  /** null = a IA não conseguiu encaixar a mensagem em nenhum tópico (saudação, assunto fora do escopo...). */
-  readonly topico: IdTopico | null;
-  /** 0 a 1, informado pelo próprio modelo. É uma estimativa, não uma probabilidade calibrada. */
-  readonly confianca: number;
+  topico: IdTopico | null; // null = indefinido
+  confianca: number; // 0 a 1
 }
 
+/** Uma opção que a IA pode escolher dentro de um nível do menu. */
+export interface OpcaoClassificavel {
+  readonly id: string;
+  readonly descricao: string;
+}
+
+/** Resultado de escolher entre as opções de um nível. */
+export interface EscolhaDeOpcao {
+  id: string | null; // null = indefinido
+  confianca: number; // 0 a 1
+}
+
+/** O que o núcleo precisa de uma IA: escolher uma opção de uma lista fechada. */
 export interface ClassificadorDeIntencao {
   readonly nome: string;
+  /** Escolhe entre os tópicos principais (menu raiz). */
   classificar(texto: string, topicos: readonly Topico[]): Promise<Classificacao>;
+  /** Escolhe entre as opções de um nível do menu (sub-menus). */
+  escolherOpcao(texto: string, opcoes: readonly OpcaoClassificavel[]): Promise<EscolhaDeOpcao>;
 }

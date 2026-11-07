@@ -1,9 +1,9 @@
--- Migração 003: serviços contratados por cada cliente (história 1.3).
+-- Migração 006: serviços contratados por cada cliente (história 1.3).
 --   * cria servicos_contratados, ligada a clientes, de onde o bot lê o serviço de quem pergunta.
 -- Pré-requisito: tabela clientes do schema original. Idempotente: pode ser reaplicada sem erro
 -- (IF NOT EXISTS), mas NÃO corrige uma tabela já existente com outra estrutura.
 -- Executar com
---   psql -X -v ON_ERROR_STOP=1 -f db/migrations/003_servico_contratado.sql
+--   psql -X -v ON_ERROR_STOP=1 -f db/migrations/006_servico_contratado.sql
 -- Não usar --single-transaction: este arquivo já controla a transação.
 BEGIN;
 SET LOCAL search_path = public, pg_catalog;
@@ -15,7 +15,7 @@ BEGIN
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'clientes' AND column_name = 'id' AND udt_name = 'int4'
   ) THEN
-    RAISE EXCEPTION 'Migração 003: tabela public.clientes ausente ou com id incompatível.';
+    RAISE EXCEPTION 'Migração 006: tabela public.clientes ausente ou com id incompatível.';
   END IF;
 END;
 $$;

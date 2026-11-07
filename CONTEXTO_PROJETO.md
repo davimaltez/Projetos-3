@@ -23,9 +23,9 @@ O sistema é uma plataforma de atendimento conversacional híbrido (Chatbot auto
    - Ordenação e filtragem delegadas diretamente ao banco de dados SQL (PostgreSQL) para escalabilidade.
    - Entidades ricas com validações: `Ticket`, `Conversa`, `Mensagem`, `Cliente`, `Atendente` e `Chatbot`, unificadas sob o contrato `Remetente`.
    - Implementação de dupla persistência: `RepositorioDeFilaPg` (PostgreSQL) e `RepositorioDeFilaEmMemoria` (para testes unitários rápidos).
-   - Suíte de 115 testes automatizados (unitários e integração com Postgres) passando com 100% de sucesso.
-4. **Interface Web de Monitoramento:**
-   - Servidor HTTP Express servindo páginas estáticas para conferência de status da aplicação (`interface/index.html`, `interface/status.html`).
+   - Testes unitários e de integração com PostgreSQL validam a fila, o atendimento, a API e migrações sem sessão real de WhatsApp.
+4. **HTTP de diagnóstico e operação:**
+   - Servidor HTTP Express com páginas estáticas, `/estou-vivo`, `/status` e rotas autenticadas `/fila`, `/tickets/:protocolo/assumir` e `/tickets/:protocolo/historico`. A página visual de status continua em construção.
 
 ---
 
@@ -40,15 +40,15 @@ O sistema é uma plataforma de atendimento conversacional híbrido (Chatbot auto
   - `Ticket.ts`: Atribuição de atendentes, ciclo de vida e priorização.
   - `Enums.ts`: `TipoRemetente`, `PrioridadeTicket` (com `URGENTE`), `StatusAtendente`, `TipoAtendimento`, `StatusConversa`.
 - **Serviços e Regras da Fila**:
-  - `ServicoDeFila.ts`: Orquestração de entrada, atribuição e saída da fila.
+  - `ServicoDeFila.ts`: Orquestração de entrada, consulta e atribuição da fila. O encerramento persistido ainda não é exposto pela API.
   - `OrdemDaFila.ts` e `ErrosDaFila.ts`: Regras de ordenação desacopladas e exceções de domínio.
-  - `RepositorioDeFila.ts`: Interface/Porta para persistência (`listarAguardando`, `buscarPorId`, `atribuirAtendente`).
+  - `RepositorioDeFila.ts`: Interface/Porta para persistência (`listarAguardando`, `buscarPorId`, `atribuirAtendente`, `enfileirar`, `buscarPorConversa`).
 - **Navegação & Segurança**:
   - `Atendimento.ts`, `Menu.ts`, `Topicos.ts`: Fluxos de conversa e menus navegáveis.
   - `LimitadorDeTaxa.ts`, `PrivacidadeDeLog.ts`: Proteção contra abusos e mascaramento de dados sensíveis.
 
 ### `src/canais/` (Infraestrutura de Mensageria)
-- `whatsapp-baileys/CanalWhatsAppBaileys.ts`: Implementação do canal usando `@whiskeysockets/baileys`.
+- `whatsapp-baileys/CanalWhatsAppBaileys.ts`: Implementação do canal usando o pacote `baileys`.
 - `whatsapp-baileys/PoliticaDeReconexao.ts`: Backoff exponencial e recuperação de sessão.
 - `RitmoDeDigitacao.ts`: Delay humanizado antes de despachar mensagens.
 
@@ -58,18 +58,20 @@ O sistema é uma plataforma de atendimento conversacional híbrido (Chatbot auto
 ### `src/repositorios/` (Acesso a Dados / Adapters)
 - `BancoDeDados.ts`: Pool de conexão Postgres (`pg`).
 - `RepositorioDeFilaPg.ts`: Implementação SQL com joins complexos, ordenação condicional e reconstrução das entidades de domínio.
-- `RepositorioDeFilaEmMemoria.ts`: Implementação em memória para testes e fallback.
+- `RepositorioDeFilaEmMemoria.ts`: Implementação em memória somente para testes; a aplicação usa PostgreSQL e não perde tickets em um fallback silencioso.
 - `ContextoMenuRepositorio.ts`: Cache/persistência do estado de navegação do menu por cliente.
 - `ClienteRepositorio.ts`, `ConversaRepositorio.ts`, `MensagemRepositorio.ts`, `EventoRepositorio.ts`: CRUDs auxiliares.
 
 ### `db/` (Migrações e Schemas)
 - `schema.sql`: Definição base de tabelas.
 - `migrations/001_fila_atendimento_humano.sql`: Criação das tabelas de fila, tickets e atendentes.
-- `migrations/002_fila_conforme_plano.sql`: Ajustes finos: `tickets.id` e `conversas.id` como texto, enum com `URGENTE`, coluna `criado_em`.
+- `migrations/002_fila_conforme_plano.sql`: Renomeia `tickets.protocolo` para `tickets.id` (TEXT), inclui `URGENTE` e `conversas.criado_em`; os IDs numéricos das demais tabelas permanecem numéricos no SQL.
+- `migrations/003_compatibilidade_integracao.sql`: converte exclusivamente o primeiro layout da branch servico-de-fila para o layout da equipe, preservando dados.
+- `src/scripts/migrarBanco.ts` e `MigradorDoBanco`: comando `npm run db:migrate`, detecta o estado e aplica somente as migrações necessárias em transação.
 - `tests/fila.sql`: Scripts SQL puros para validação de integridade relacional.
 
 ### `interface/` & `src/http/` (Web/Status)
-- `ServidorHttp.ts`: Servidor Express para health check e interface estática.
+- `ServidorHttp.ts`: Servidor Express para diagnóstico, interface estática e operações autenticadas da fila. `AutenticadorDeOperador` lê `OPERADORES_HTTP_JSON`; `AtendenteRepositorio` cadastra essas identidades ao iniciar, preservando disponibilidade e especialidade.
 - `interface/index.html`, `interface/status.html`, `interface/style.css`, `assets/robozinho.png`.
 
 ---
@@ -108,7 +110,7 @@ O sistema é uma plataforma de atendimento conversacional híbrido (Chatbot auto
 
 ```yaml
 PROJETO: Chatbot WhatsApp com Fila de Atendimento Humano
-STACK: TypeScript (Node.js strict), Baileys (@whiskeysockets/baileys), PostgreSQL (pg), Gemini AI, Express, Jest.
+STACK: TypeScript (Node.js strict), Baileys (@whiskeysockets/baileys), PostgreSQL (pg), Gemini AI, Express, node:test e tsx.
 ARQUITETURA: Clean Architecture / DDD Lite
   - src/nucleo: Entidades ricas, Serviços de Domínio (ServicoDeFila, Atendimento, Menu, Topicos), Casos de Uso.
   - src/repositorios: RepositorioDeFilaPg (Postgres com SQL otimizado), RepositorioDeFilaEmMemoria, ContextoMenuRepositorio.
@@ -116,20 +118,21 @@ ARQUITETURA: Clean Architecture / DDD Lite
   - src/ia: ClassificadorGemini (intenções desconhecidas).
 
 REGRAS DE DOMÍNIO CRÍTICAS:
-  1. Identificadores: IDs de Conversa, Mensagem, Ticket, Remetente e Usuário são SEMPRE strings (UUIDs ou WhatsApp JIDs).
+  1. Identificadores: IDs das entidades são strings. No banco, clientes/conversas/mensagens continuam com IDs numéricos; tickets.id é o protocolo textual.
   2. Hierarquia de Remetentes: Chatbot, Atendente e Cliente implementam a interface Remetente (getId(), getNome(), getTipo(), getIdentificacao()).
   3. Fila de Transbordo:
      - Prioridades: URGENTE > ALTA > MEDIA > BAIXA.
-     - Critério de Desempate: dataCriacao mais antiga (FIFO).
+     - Critério de Desempate: dataAbertura mais antiga (FIFO).
      - A ordenação e filtro são feitos a nível de banco (SQL ORDER BY no RepositorioDeFilaPg) e em memória via OrdemDaFila.ts.
-  4. Atendimento Humano: Ao atribuir um atendente, o status do ticket muda para 'EM_ATENDIMENTO' e o atendente para 'OCUPADO'.
+  4. Atendimento Humano: A assunção persistida atualiza ticket e conversa para 'EM_ATENDIMENTO' e registra um evento na mesma transação. O cadastro prévio é obrigatório; a disponibilidade do atendente não é alterada automaticamente pelo repositório.
 
 ESTADO DO BANCO (Migrations):
   - 001_fila_atendimento_humano.sql: Criação inicial das tabelas fila/atendimento.
-  - 002_fila_conforme_plano.sql: Ajustes de tipagem texto para IDs, prioridade URGENTE e conversas.criado_em.
+  - 002_fila_conforme_plano.sql: tickets.id textual, prioridade URGENTE e conversas.criado_em.
+  - 003_compatibilidade_integracao.sql: converte o layout da primeira versão da branch; não é aplicada em bancos já atualizados pela 002.
 
 PRÓXIMOS PASSOS / DÍVIDAS TÉCNICAS:
-  - Ligar o evento do Baileys diretamente ao gatilho de transbordo (transição Bot -> Fila Humana em runtime).
+  - Integração explícita já ativa: opção 3/comando atendente -> ticket persistido -> operador HTTP. Transbordo automático após falhas repetidas ainda não está ligado ao Atendimento.
   - Webhook/Sockets ou endpoint para o atendente humano responder mensagens do WhatsApp via interface web.
-  - Finalizar testes ponta a ponta (E2E) unindo CanalWhatsAppBaileys -> Menu -> Fila -> RepositorioDeFilaPg.
+  - Testes de integração usam canal simulado -> Atendimento -> PostgreSQL -> HTTP; não iniciam Baileys ou Gemini reais.
 ```

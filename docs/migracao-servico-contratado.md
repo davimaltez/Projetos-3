@@ -2,7 +2,7 @@
 
 Esta etapa adiciona a tabela `servicos_contratados`, de onde o bot lê o serviço
 de cada cliente quando ele pergunta sobre o serviço atual (tópico
-`servico_contratado`, caminho 3). Não cria tela de cadastro nem importação: os
+`servico_contratado`, caminho 4). Não cria tela de cadastro nem importação: os
 serviços precisam ser inseridos por quem administra o banco.
 
 ## Modelo e decisões
@@ -29,7 +29,7 @@ feita a cada pergunta.
 de um volume vazio, e já inclui a tabela no final. Não remova o volume para
 atualizar um banco existente: use a migração.
 
-Diferente da 001, a 003 é idempotente (`IF NOT EXISTS`): reaplicar não dá
+Diferente da 001, a 006 é idempotente (`IF NOT EXISTS`): reaplicar não dá
 erro. Em compensação, se já existir uma `servicos_contratados` com outra
 estrutura, ela é mantida como está, sem aviso. Confira a estrutura depois
 (seção de verificação).
@@ -42,14 +42,14 @@ estrutura, ela é mantida como está, sem aviso. Confira a estrutura depois
 Na raiz do projeto:
 
 ```powershell
-psql -X -v ON_ERROR_STOP=1 -f db/migrations/003_servico_contratado.sql
+psql -X -v ON_ERROR_STOP=1 -f db/migrations/006_servico_contratado.sql
 if ($LASTEXITCODE -ne 0) { throw "Migração não aplicada; verifique o erro do psql." }
 ```
 
 Ou pelo serviço `postgres` do Compose:
 
 ```powershell
-Get-Content -Raw -Encoding UTF8 db/migrations/003_servico_contratado.sql |
+Get-Content -Raw -Encoding UTF8 db/migrations/006_servico_contratado.sql |
   docker compose exec -T postgres sh -c 'psql -X -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "$POSTGRES_DB"'
 if ($LASTEXITCODE -ne 0) { throw "Migração não aplicada; verifique o erro do psql." }
 ```

@@ -8,8 +8,9 @@
 export type IdTopico =
   | "status_demanda"
   | "operacao_sistema"
+  | "topico_3"
+  | "atendimento_humano"
   | "servico_contratado"
-  | "topico_4"
   | "relatorio_admin";
 
 /**
@@ -24,6 +25,13 @@ export interface SubTopico {
   readonly resposta?: string;
   /** Com filhos, a opção abre um sub-menu em vez de responder. */
   readonly filhos?: readonly SubTopico[];
+  /** Ajuda a IA a escolher esta opção quando o cliente escreve em vez de digitar o número. */
+  readonly descricao?: string;
+  /** Outras formas de o cliente chamar esta opção (casamento por texto, sem IA). */
+  readonly sinonimos?: readonly string[];
+
+  /** "perguntar": escolher esta opção abre o modo "escreva sua pergunta" (a resposta vira o convite). */
+  readonly acao?: "perguntar";
 }
 
 export interface Topico {
@@ -48,6 +56,7 @@ export interface Topico {
    * abre um sub-menu em vez de enviar respostaProvisoria. Os filhos não são vistos pela IA.
    */
   readonly filhos?: readonly SubTopico[];
+  readonly sinonimos?: readonly string[];
 }
 
 export const TOPICOS: readonly Topico[] = [
@@ -72,49 +81,68 @@ export const TOPICOS: readonly Topico[] = [
       "Entendi: você tem uma dúvida sobre como usar o sistema. As respostas para esse tipo de dúvida ainda estão sendo preparadas e em breve estarão disponíveis por aqui.",
     ativo: true,
     somenteAdmin: false,
-    // EXEMPLO de sub-menu (textos ilustrativos, trocar quando a WXN enviar o manual).
+    // EXEMPLO de sub-menu 
     filhos: [
-      {
-        id: "acesso",
-        rotulo: "Entrar no sistema",
-        resposta: "Para entrar, use o seu e-mail e a sua senha na tela inicial.",
+        {
+          id: "acesso",
+          rotulo: "Entrar no sistema",
+          descricao: "Como fazer login: acessar o sistema com e-mail e senha.",
+          sinonimos: ["login", "acessar", "logar"],
+          resposta: "Para entrar, use o seu e-mail e a sua senha na tela inicial.",
+        },
+        {
+          id: "problemas",
+          rotulo: "Estou com um problema",
+          descricao: "Algo não está funcionando: senha, lentidão ou erro.",
+          sinonimos: ["erro", "defeito", "nao funciona"],
+          filhos: [
+            {
+              id: "senha",
+              rotulo: "Esqueci minha senha",
+              descricao: "O cliente não lembra a senha ou não consegue entrar por causa dela.",
+              sinonimos: ["recuperar senha", "trocar senha"],
+              resposta: 'Na tela de entrada, toque em "Esqueci minha senha".',
+            },
+            {
+              id: "lento",
+              rotulo: "O sistema está lento",
+              descricao: "O sistema demora, trava ou está pesado.",
+              sinonimos: ["travando", "devagar", "demorando"],
+              resposta: "Feche e abra o sistema de novo. Se continuar, avise a gente.",
+            },
+          ],
+        },
+
+        {
+        id: "outra_duvida",
+        rotulo: "Outra dúvida: escrever minha pergunta",
+        descricao:
+          "O cliente tem uma pergunta própria sobre como usar o sistema, que não é só entrar ou resolver um problema de senha ou lentidão: cadastrar usuário, demandas, exportar dados, perfil e avisos.",
+        sinonimos: ["outra duvida", "escrever pergunta"],
+        acao: "perguntar",
+        resposta: "Pode escrever a sua dúvida. Para voltar ao menu, digite 0.",
       },
-      {
-        id: "problemas",
-        rotulo: "Estou com um problema",
-        filhos: [
-          {
-            id: "senha",
-            rotulo: "Esqueci minha senha",
-            resposta: 'Na tela de entrada, toque em "Esqueci minha senha".',
-          },
-          {
-            id: "lento",
-            rotulo: "O sistema está lento",
-            resposta: "Feche e abra o sistema de novo. Se continuar, avise a gente.",
-          },
-        ],
-      },
-    ],
+      ],
+  },
+  {
+    id: "atendimento_humano",
+    caminho: 3,
+    rotulo: "Falar com um atendente",
+    descricao: "O usuário pede explicitamente para falar com uma pessoa, atendente ou suporte humano.",
+    respostaProvisoria: "Vou encaminhar você para um atendente.",
+    ativo: true,
+    somenteAdmin: false,
   },
   {
     id: "servico_contratado",
-    caminho: 3,
+    // Caminho 3 ficou com "Falar com um atendente" (main); o serviço contratado usa o 4.
+    caminho: 4,
     rotulo: "Meu serviço contratado",
     descricao:
       "O cliente quer saber sobre o serviço que contratou com a empresa: qual é o serviço ou plano, o que está incluído, desde quando tem, se está em dia ou suspenso.",
     respostaProvisoria:
       "Entendi: você quer saber sobre o seu serviço contratado. No momento não consegui consultar o seu cadastro. Tente de novo em alguns minutos.",
     ativo: true,
-    somenteAdmin: false,
-  },
-  {
-    id: "topico_4",
-    caminho: 4,
-    rotulo: "Tópico 4",
-    descricao: "A definir: depende das perguntas frequentes que a WXN ainda vai informar.",
-    respostaProvisoria: "Esse assunto ainda não está disponível por aqui.",
-    ativo: false,
     somenteAdmin: false,
   },
   {

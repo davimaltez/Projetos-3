@@ -24,10 +24,21 @@ export class Config {
   readonly iaConfiancaMinima: number;
   /** Mensagens aceitas por minuto de cada remetente; 0 = sem limite. */
   readonly limiteMensagensPorMinuto: number;
+
+  /** Arquivo de texto com o manual que o gerador de respostas consulta. */
+  readonly manualCaminho: string;
+  /** Modelo do gerador. Por padrão, o mesmo da classificação. */
+  readonly geradorModelo: string;
+  readonly geradorTimeoutMs: number;
+
   readonly digitandoMinimoMs: number;
   readonly digitandoMaximoMs: number;
+  readonly operadoresHttpJson: string;
+  readonly operadoresWhatsappJson: string;
 
   private constructor(env: NodeJS.ProcessEnv) {
+    this.operadoresHttpJson = env.OPERADORES_HTTP_JSON?.trim() || "[]";
+    this.operadoresWhatsappJson = env.OPERADORES_WHATSAPP_JSON?.trim() || "[]";
     this.digitandoMinimoMs = Config.numero(env, "DIGITANDO_MIN_MS", 1_500, { minimo: 0 });
     this.digitandoMaximoMs = Config.numero(env, "DIGITANDO_MAX_MS", 4_000, { minimo: 0 });
     if (this.digitandoMaximoMs < this.digitandoMinimoMs) {
@@ -42,6 +53,9 @@ export class Config {
     this.geminiTimeoutMs = Config.numero(env, "GEMINI_TIMEOUT_MS", 8_000, { minimo: 1, inteiro: true });
     this.iaConfiancaMinima = Config.numero(env, "IA_CONFIANCA_MINIMA", 0.6, { minimo: 0, maximo: 1 });
     this.limiteMensagensPorMinuto = Config.numero(env, "LIMITE_MENSAGENS_POR_MINUTO", 10, { minimo: 0, inteiro: true });
+    this.manualCaminho = env.MANUAL_CAMINHO?.trim() || "./manual/manual.md";
+    this.geradorModelo = env.GERADOR_MODELO?.trim() || this.geminiModelo;
+    this.geradorTimeoutMs = Config.numero(env, "GERADOR_TIMEOUT_MS", 15_000, { minimo: 1, inteiro: true });
   }
 
   static carregar(env: NodeJS.ProcessEnv = process.env): Config {
@@ -70,11 +84,11 @@ export class Config {
     const { minimo, maximo } = limites;
     if ((minimo !== undefined && valor < minimo) || (maximo !== undefined && valor > maximo)) {
       const faixa =
-        minimo !== undefined && maximo !== undefined
-          ? `um valor entre ${minimo} e ${maximo}`
-          : minimo !== undefined
-            ? `maior ou igual a ${minimo}`
-            : `menor ou igual a ${maximo}`;
+          minimo !== undefined && maximo !== undefined
+              ? `um valor entre ${minimo} e ${maximo}`
+              : minimo !== undefined
+                  ? `maior ou igual a ${minimo}`
+                  : `menor ou igual a ${maximo}`;
       throw new Error(`${nome} deve ser ${faixa} (recebido: "${bruto}").`);
     }
     return valor;
