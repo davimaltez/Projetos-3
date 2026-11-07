@@ -74,6 +74,12 @@ export class MigradorDoBanco {
           "migrations/005_operador_no_whatsapp.sql"
       );
 
+      // História 1.3: serviços contratados por cliente.
+      await this.aplicar(
+          db,
+          "migrations/006_servico_contratado.sql"
+      );
+
       // Verifica se a estrutura principal está disponível.
       await db.query(`
         SELECT

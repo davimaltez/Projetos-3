@@ -17,6 +17,7 @@ import type {
   RepositorioDeMensagens,
   TransferenciaPendente,
 } from "./Repositorios.js";
+import type { ResolvedorDeResposta } from "./RespostaDeServicoContratado.js";
 import { TOPICOS, topicosAtivos, type Topico } from "./Topicos.js";
 
 /** Como a decisão foi tomada. Vai para eventos.origem e explica cada resposta no relatório. */
@@ -150,7 +151,8 @@ export class Atendimento {
       private readonly menu: Menu,
       private readonly opcoes: OpcoesDeAtendimento,
       private readonly fila: ServicoDeFila,
-      private readonly gerador: GeradorDeResposta | null = null
+      private readonly gerador: GeradorDeResposta | null = null,
+      private readonly respostaDoServico: ResolvedorDeResposta | null = null
   ) {}
 
   async processar(mensagem: MensagemRecebida): Promise<void> {
@@ -229,7 +231,7 @@ export class Atendimento {
         ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
             ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
             : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
-        : this.textoDaResposta(decisao);
+        : (await this.respostaDoCliente(decisao, conversaId)) ?? this.textoDaResposta(decisao);
 
     // Log sem dados pessoais: telefone mascarado e só o começo do texto (ver PrivacidadeDeLog).
     console.log(
@@ -326,6 +328,20 @@ export class Atendimento {
     if (decisao.texto !== null) return decisao.texto;
     if (decisao.topico) return decisao.topico.respostaProvisoria;
     return this.menu.texto();
+  }
+
+  /**
+   * História 1.3: tópico servico_contratado responde com os dados do cliente, venha a decisão
+   * do menu (que já preenche decisao.texto) ou da IA. Falha ou null → texto padrão (provisório).
+   */
+  private async respostaDoCliente(decisao: Decisao, conversaId: number): Promise<string | null> {
+    if (decisao.topico?.id !== "servico_contratado" || !this.respostaDoServico) return null;
+    try {
+      return await this.respostaDoServico.responder(conversaId);
+    } catch (erro) {
+      console.warn("[atendimento] não consegui consultar os serviços do cliente:", erro instanceof Error ? erro.message : erro);
+      return null;
+    }
   }
 
   private async decidir(texto: string, estado: EstadoDoMenu, clienteInfo: DadosDoCliente): Promise<Decisao> {
