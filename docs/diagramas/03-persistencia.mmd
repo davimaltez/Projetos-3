@@ -1,0 +1,97 @@
+---
+title: WXN — Contratos e adaptadores de persistência
+---
+classDiagram
+  direction LR
+class RepositorioDeFila {
+    <<interface>>
+    +enfileirar(conversaId, pedido) Promise~Ticket~
+    +buscarPorConversa(conversaId) Promise~Ticket?~
+    +listarAguardando() Promise~Ticket[]~
+    +buscarPorId(id) Promise~Ticket?~
+    +atribuirAtendente(ticketId, atendenteId) Promise~void~
+    +buscarEmAtendimentoPorAtendente(atendenteId) Promise~Ticket?~
+    +obterDestinoDoCliente(ticketId, atendenteId) Promise~string?~
+    +registrarRespostaDoAtendente(ticketId, atendenteId, idEnviado, texto) Promise~void~
+    +encerrarTicket(ticketId, atendenteId) Promise~void~
+  }
+  class RepositorioDeClientes {
+    <<interface>>
+    +obterOuCriar(id, origem, enderecoResposta, nome) Promise~number~
+    +obterPorId(id) Promise~DadosDoCliente?~
+    +salvarEmpresa(id, empresa) Promise~void~
+  }
+  class RepositorioDeConversas {
+    <<interface>>
+    +obterOuCriarAtual(clienteId) Promise~number~
+  }
+  class RepositorioDeMensagens {
+    <<interface>>
+    +registrarEntrada(conversaId, idExterno, texto) Promise~number?~
+    +registrarSaida(conversaId, idExterno, texto) Promise~void~
+    +marcarProcessada(id) Promise~void~
+  }
+  class RepositorioDeEventos {
+    <<interface>>
+    +registrar(evento) Promise~void~
+  }
+  class RepositorioDeContextoDoMenu {
+    <<interface>>
+    +obter(conversaId) Promise~EstadoDoMenu~
+    +salvar(conversaId, estado) Promise~void~
+    +obterEmpresa(conversaId) Promise~string?~
+  }
+  class RepositorioDeServicos {
+    <<interface>>
+    +listarAtivosDaConversa(conversaId) Promise~ServicoContratado[]~
+  }
+  class RepositorioDeFilaPg { -Pool pool }
+  class RepositorioDeFilaEmMemoria {
+    -Ticket[] tickets
+    -Atendente[] atendentes
+    -Map conversas
+    -Map enderecos
+    +definirEnderecoCliente(protocolo, endereco) void
+  }
+  class ClienteRepositorio { -Pool pool }
+  class ConversaRepositorio { -Pool pool }
+  class MensagemRepositorio { -Pool pool }
+  class EventoRepositorio { -Pool pool }
+  class ContextoMenuRepositorio {
+    -Pool pool
+    -number validadeMs
+  }
+  class ServicoContratadoRepositorio { -Pool pool }
+  class AtendenteRepositorio {
+    -Pool pool
+    +cadastrar(atendentes) Promise~void~
+  }
+  class MigradorDoBanco {
+    -Pool pool
+    +executar() Promise~void~
+  }
+  class BancoDeDados {
+    +Pool pool
+    +verificar() Promise~boolean~
+    +encerrar() Promise~void~
+  }
+  class Pool { <<external>> }
+
+  RepositorioDeFila <|.. RepositorioDeFilaPg
+  RepositorioDeFila <|.. RepositorioDeFilaEmMemoria
+  RepositorioDeClientes <|.. ClienteRepositorio
+  RepositorioDeConversas <|.. ConversaRepositorio
+  RepositorioDeMensagens <|.. MensagemRepositorio
+  RepositorioDeEventos <|.. EventoRepositorio
+  RepositorioDeContextoDoMenu <|.. ContextoMenuRepositorio
+  RepositorioDeServicos <|.. ServicoContratadoRepositorio
+  BancoDeDados "1" *-- "1" Pool : cria e encerra
+  RepositorioDeFilaPg --> Pool
+  ClienteRepositorio --> Pool
+  ConversaRepositorio --> Pool
+  MensagemRepositorio --> Pool
+  EventoRepositorio --> Pool
+  ContextoMenuRepositorio --> Pool
+  ServicoContratadoRepositorio --> Pool
+  AtendenteRepositorio --> Pool
+  MigradorDoBanco --> Pool

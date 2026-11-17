@@ -1,0 +1,104 @@
+---
+title: WXN — Atendimento e serviços de aplicação
+---
+classDiagram
+  direction LR
+class Atendimento {
+    -CanalMensagens canal
+    -Menu menu
+    -ServicoDeFila fila
+    -Chatbot chatbot
+    -ClassificadorDeIntencao? classificador
+    -GeradorDeResposta? gerador
+    -ResolvedorDeResposta? respostaDoServico
+    +processar(mensagem) Promise~void~
+  }
+  class FluxoDoOperador {
+    -CanalMensagens canal
+    -ServicoDeFila fila
+    -Map porTelefone
+    -Map selecoes
+    -Map ativos
+    +processarSeOperador(mensagem) Promise~boolean~
+  }
+  class ServicoDeFila {
+    -RepositorioDeFila repositorio
+    +solicitarAtendimentoHumano(conversaId, pedido) Promise~Ticket~
+    +obterAtendimentoHumano(conversaId) Promise~Ticket?~
+    +listarFila() Promise~Ticket[]~
+    +assumirTicket(ticketId, atendente) Promise~void~
+    +obterTicket(ticketId) Promise~Ticket~
+    +obterHistoricoDoTicket(ticketId) Promise~Mensagem[]~
+    +obterTicketAtivo(atendente) Promise~Ticket?~
+    +responderCliente(ticketId, atendente, texto, enviar) Promise~void~
+    +encerrarAtendimento(ticketId, atendente) Promise~void~
+  }
+  class Menu {
+    -Topico[] raizes
+    +texto(caminho) string
+    +interpretar(texto, caminho) Leitura
+    +buscarPorTexto(texto, caminho) Selecao?
+    +opcoesDoNivel(caminho) OpcaoDoNivel[]
+    +escolher(caminho, idOpcao) Selecao?
+    +abrirTopico(topico) NavegacaoDeMenu?
+  }
+  class LimitadorDeTaxa {
+    -number maximo
+    -number janelaMs
+    -Map usosPorChave
+    +tentar(chave) boolean
+  }
+  class Chatbot
+  class CanalMensagens {
+    <<interface>>
+    +iniciar(aoReceber) Promise~void~
+    +indicarDigitando(endereco) Promise~void~
+    +enviarTexto(endereco, texto) Promise~string~
+    +estaConectado() boolean
+    +encerrar() Promise~void~
+  }
+  class ClassificadorDeIntencao {
+    <<interface>>
+    +classificar(texto, topicos) Promise~Classificacao~
+    +escolherOpcao(texto, opcoes) Promise~EscolhaDeOpcao~
+  }
+  class GeradorDeResposta {
+    <<interface>>
+    +gerar(pergunta, historico) Promise~RespostaGerada~
+  }
+  class ResolvedorDeResposta {
+    <<interface>>
+    +responder(conversaId) Promise~string?~
+  }
+  class RespostaDeServicoContratado {
+    -RepositorioDeServicos servicos
+    -Menu menu
+    +responder(conversaId) Promise~string~
+  }
+  class RepositorioDeFila { <<interface>> }
+  class RepositorioDeClientes { <<interface>> }
+  class RepositorioDeConversas { <<interface>> }
+  class RepositorioDeMensagens { <<interface>> }
+  class RepositorioDeEventos { <<interface>> }
+  class RepositorioDeContextoDoMenu { <<interface>> }
+  class RepositorioDeServicos { <<interface>> }
+
+  Atendimento --> CanalMensagens : recebe e responde
+  Atendimento --> Menu : navega
+  Atendimento --> Chatbot : limite de tentativas
+  Atendimento --> ServicoDeFila : transfere e consulta
+  Atendimento --> ClassificadorDeIntencao : opcional
+  Atendimento --> GeradorDeResposta : opcional
+  Atendimento --> ResolvedorDeResposta : opcional
+  Atendimento --> LimitadorDeTaxa : limita mensagens e avisos
+  Atendimento --> RepositorioDeClientes
+  Atendimento --> RepositorioDeConversas
+  Atendimento --> RepositorioDeMensagens
+  Atendimento --> RepositorioDeEventos
+  Atendimento --> RepositorioDeContextoDoMenu
+  FluxoDoOperador --> CanalMensagens
+  FluxoDoOperador --> ServicoDeFila : lista, assume, responde e encerra
+  ServicoDeFila --> RepositorioDeFila
+  ResolvedorDeResposta <|.. RespostaDeServicoContratado
+  RespostaDeServicoContratado --> RepositorioDeServicos
+  RespostaDeServicoContratado --> Menu

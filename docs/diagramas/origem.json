@@ -1,0 +1,12 @@
+{
+  "repositorio": "davimaltez/Projetos-3",
+  "pr": 9,
+  "commit": "332b0eead1e387ffca7e077036ce3c35ae65d18f",
+  "data": "17/11/2026",
+  "classesDeProducao": 35,
+  "ferramentas": {
+    "@mermaid-js/mermaid-cli": "12.2.0",
+    "puppeteer": "25.18.1",
+    "pdf-lib": "1.17.1"
+  }
+}

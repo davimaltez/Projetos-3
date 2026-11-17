@@ -1,0 +1,152 @@
+---
+title: WXN — Entidades de negócio
+---
+classDiagram
+  direction TB
+class Usuario {
+    <<abstract>>
+    -string id
+    -Informacao nome
+    -Informacao email
+    +getId() string
+    +getNome() Informacao
+    +getEmail() Informacao
+    +setNome(nome) void
+    +setEmail(email) void
+  }
+  class Remetente {
+    <<interface>>
+    +getId() string
+    +getNome() string
+    +getTipo() TipoRemetente
+    +getIdentificacao() string
+  }
+  class Cliente {
+    -string telefone
+    -string? empresa
+    -TipoAtendimento tipoAtendimento
+    -boolean autenticado
+    +autenticar() boolean
+    +iniciarConversa(id, canal, chatbot) Conversa
+    +getTelefone() string
+    +getEmpresa() string?
+    +getNome() string
+    +getTipoAtendimento() TipoAtendimento
+    +setTipoAtendimento(tipo) void
+    +isAutenticado() boolean
+    +getTipo() TipoRemetente
+    +getIdentificacao() string
+  }
+  class Atendente {
+    -StatusAtendente status
+    -string? especialidade
+    +getStatus() StatusAtendente
+    +setStatus(status) void
+    +getEspecialidade() string?
+    +assumirTicket(ticket) void
+    +encerrarTicket(ticket) void
+    +getTipo() TipoRemetente
+    +getIdentificacao() string
+  }
+  class Chatbot {
+    -string id
+    -string nome
+    -string tomDeVoz
+    -number limiteTentativas
+    -boolean disponivel24h
+    +getId() string
+    +getNome() string
+    +detectarIntencao(mensagem) string
+    +responder(mensagem) Mensagem
+    +atingiuLimiteDeTentativas(falhas) boolean
+    +deveTransferir(conversa) boolean
+    +getLimiteTentativas() number
+    +isDisponivel24h() boolean
+    +getIdentificacao() string
+  }
+  class Conversa {
+    -string id
+    -string? canal
+    -Date dataCriacao
+    -Date? dataFim
+    -StatusConversa? status
+    -string? estadoPersistido
+    -Mensagem[] mensagens
+    -Cliente cliente
+    -Chatbot? chatbot
+    -Ticket? ticket
+    +reconstituir(dados)$ Conversa
+    +getId() string
+    +getStatus() StatusConversa?
+    +getCliente() Cliente
+    +getChatbot() Chatbot?
+    +getHistorico() Mensagem[]
+    +adicionarMensagem(msg) void
+    +transferirParaHumano(pedido) Ticket
+    +iniciarAtendimento() void
+    +encerrar() void
+  }
+  class Mensagem {
+    -string id
+    -string texto
+    -Date dataEnvio
+    -Remetente remetente
+    -boolean processado
+    -string? intencaoDetectada
+    -string? direcao
+    +reconstituir(dados)$ Mensagem
+    +getId() string
+    +getTexto() string
+    +getDataEnvio() Date
+    +getRemetente() Remetente
+    +isProcessado() boolean
+    +setProcessado(valor) void
+    +getIntencaoDetectada() string?
+    +setIntencaoDetectada(intencao) void
+    +getDirecao() string?
+  }
+  class Ticket {
+    -string id
+    -string assunto
+    -PrioridadeTicket prioridade
+    -StatusTicket status
+    -Date dataAbertura
+    -Date? dataFechamento
+    -string resumoBot
+    -MotivoDaTransferencia motivo
+    -JSON dados
+    -Conversa conversa
+    -Atendente? atendente
+    +reconstituir(dados)$ Ticket
+    +getId() string
+    +getProtocolo() string
+    +getAssunto() string
+    +getPrioridade() PrioridadeTicket
+    +setPrioridade(prioridade) void
+    +getStatus() StatusTicket
+    +getMotivo() MotivoDaTransferencia
+    +getDados() JSON
+    +getConversa() Conversa
+    +getAtendente() Atendente?
+    +atribuirAtendente(atendente) void
+    +fechar() void
+  }
+  class PedidoDeAtendimento {
+    <<interface>>
+    +string assunto
+    +PrioridadeTicket prioridade
+    +MotivoDaTransferencia motivo
+    +JSON dados
+  }
+  Usuario <|-- Cliente
+  Usuario <|-- Atendente
+  Remetente <|.. Cliente
+  Remetente <|.. Atendente
+  Remetente <|.. Chatbot
+  Cliente "1" <-- "0..*" Conversa : cliente
+  Chatbot "0..1" <-- "0..*" Conversa : chatbot
+  Conversa "1" o-- "0..*" Mensagem : historico
+  Remetente "1" <-- "0..*" Mensagem : autor
+  Conversa "1" -- "0..1" Ticket : transferencia
+  Atendente "0..1" <-- "0..*" Ticket : responsavel
+  Conversa ..> PedidoDeAtendimento : recebe
