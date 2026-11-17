@@ -10,7 +10,7 @@ export type IdTopico =
   | "operacao_sistema"
   | "topico_3"
   | "atendimento_humano"
-  | "topico_4"
+  | "servico_contratado"
   | "relatorio_admin";
 
 /**
@@ -134,12 +134,15 @@ export const TOPICOS: readonly Topico[] = [
     somenteAdmin: false,
   },
   {
-    id: "topico_4",
+    id: "servico_contratado",
+    // Caminho 3 ficou com "Falar com um atendente" (main); o serviço contratado usa o 4.
     caminho: 4,
-    rotulo: "Tópico 4",
-    descricao: "A definir: depende das perguntas frequentes que a WXN ainda vai informar.",
-    respostaProvisoria: "Esse assunto ainda não está disponível por aqui.",
-    ativo: false,
+    rotulo: "Meu serviço contratado",
+    descricao:
+      "O cliente quer saber sobre o serviço que contratou com a empresa: qual é o serviço ou plano, o que está incluído, desde quando tem, se está em dia ou suspenso.",
+    respostaProvisoria:
+      "Entendi: você quer saber sobre o seu serviço contratado. No momento não consegui consultar o seu cadastro. Tente de novo em alguns minutos.",
+    ativo: true,
     somenteAdmin: false,
   },
   {

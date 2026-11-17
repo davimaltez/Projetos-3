@@ -89,7 +89,7 @@ function cenario(
       confiancaMinima: 0.6, limiteDeMensagens: null,
       avisosDeInstabilidade: new LimitadorDeTaxa(1, 60_000), avisosDeExcesso: new LimitadorDeTaxa(1, 60_000),
       perguntarEmpresa,
-    }, fila, gerador, chatbotDoAtendimento);
+    }, fila, gerador, null, chatbotDoAtendimento);
   const enviar = (texto: string, id = `entrada-${entradas.size + 1}`) => atendimento.processar({
     texto, idExterno: id, remetente: "cliente-simulado", enderecoResposta: "endereco-simulado",
   });

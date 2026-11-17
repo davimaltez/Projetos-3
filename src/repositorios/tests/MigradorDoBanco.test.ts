@@ -37,6 +37,20 @@ test("migrações e cadastro em PostgreSQL isolado", { skip: !url }, async (t) =
     await pool.query(validacaoSql.replace("SET LOCAL search_path = public, pg_catalog;", `SET LOCAL search_path = ${schema}, pg_catalog;`));
   }));
 
+  await t.test("integra empresa do cliente e serviços contratados sem perder os dados da main", () => isolado(async (pool) => {
+    await new MigradorDoBanco(pool).executar();
+    await dadosAntigos(pool);
+    await pool.query(`INSERT INTO servicos_contratados (cliente_id, nome, status, data_inicio)
+      VALUES (10, 'Suporte da main', 'EM_DIA', '2026-11-01')`);
+    // Simula a main antes do PR: serviços existem, empresa ainda não.
+    await pool.query("ALTER TABLE clientes DROP COLUMN empresa");
+    await new MigradorDoBanco(pool).executar();
+    await new MigradorDoBanco(pool).executar();
+    await pool.query("UPDATE clientes SET empresa = 'Empresa de teste' WHERE id = 10");
+    assert.equal((await pool.query("SELECT empresa FROM clientes WHERE id = 10")).rows[0].empresa, "Empresa de teste");
+    assert.equal((await pool.query("SELECT nome FROM servicos_contratados WHERE cliente_id = 10")).rows[0].nome, "Suporte da main");
+  }));
+
   await t.test("reconhece a migração 001 já aplicada e preserva tickets e datas ao aplicar 002", () => isolado(async (pool, schema) => {
     await pool.query(legado);
     await dadosAntigos(pool);

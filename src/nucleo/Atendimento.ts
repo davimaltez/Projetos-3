@@ -1,3 +1,4 @@
+import type { ResolvedorDeResposta } from "./RespostaDeServicoContratado.js";
 import type { CanalMensagens, MensagemRecebida } from "./CanalMensagens.js";
 import type { ClassificadorDeIntencao } from "./ClassificadorDeIntencao.js";
 import type { GeradorDeResposta, TrocaDeConversa } from "./GeradorDeResposta.js";
@@ -176,6 +177,7 @@ export class Atendimento {
       private readonly opcoes: OpcoesDeAtendimento,
       private readonly fila: ServicoDeFila,
       private readonly gerador: GeradorDeResposta | null = null,
+      private readonly respostaDoServico: ResolvedorDeResposta | null = null,
       /** Dono da regra de transbordo: quantas falhas seguidas levam à oferta de atendimento humano. */
       private readonly chatbot: Chatbot = new Chatbot("wxn", "Assistente WXN", "simples e cordial", LIMITE_TENTATIVAS_PADRAO, true)
   ) {}
@@ -265,7 +267,7 @@ export class Atendimento {
         ? ticket.getStatus() === StatusTicket.EM_ATENDIMENTO
             ? `Seu atendimento já está com a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode continuar enviando detalhes por aqui.`
             : `Seu atendimento foi encaminhado para a equipe. Protocolo: ${ticket.getProtocolo()}.\nVocê pode enviar mais detalhes por aqui enquanto aguarda.`
-        : this.textoDaResposta(decisao);
+        : (await this.respostaDoCliente(decisao, conversaId)) ?? this.textoDaResposta(decisao);
 
     // Log sem dados pessoais: telefone mascarado e só o começo do texto (ver PrivacidadeDeLog).
     console.log(
@@ -364,6 +366,17 @@ export class Atendimento {
     if (decisao.texto !== null) return decisao.texto;
     if (decisao.topico) return decisao.topico.respostaProvisoria;
     return this.menu.texto();
+  }
+
+  /** Consulta os serviços do cliente tanto na seleção por menu quanto por IA. */
+  private async respostaDoCliente(decisao: Decisao, conversaId: number): Promise<string | null> {
+    if (decisao.topico?.id !== "servico_contratado" || !this.respostaDoServico) return null;
+    try {
+      return await this.respostaDoServico.responder(conversaId);
+    } catch (erro) {
+      console.warn("[atendimento] não consegui consultar os serviços do cliente:", erro instanceof Error ? erro.message : erro);
+      return null;
+    }
   }
 
   /**

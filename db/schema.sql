@@ -127,6 +127,28 @@ CREATE INDEX idx_mensagens_conversa_historico
 
 COMMIT;
 
+-- História 1.3: serviços contratados. Bancos existentes: migração 006
+-- (db/migrations/006_servico_contratado.sql, ver docs/migracao-servico-contratado.md).
+CREATE TABLE IF NOT EXISTS servicos_contratados (
+  id SERIAL CONSTRAINT servicos_contratados_pkey PRIMARY KEY,
+  cliente_id INTEGER NOT NULL,
+  -- Nome e descrição são mostrados ao cliente: linguagem simples (história 1.6).
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  status TEXT NOT NULL DEFAULT 'EM_DIA',
+  data_inicio DATE NOT NULL,
+  -- false = serviço encerrado; fica guardado, mas o bot não mostra.
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  CONSTRAINT servicos_contratados_cliente_fk
+    FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE RESTRICT,
+  CONSTRAINT servicos_contratados_status_check
+    CHECK (status IN ('EM_DIA', 'PENDENTE', 'SUSPENSO'))
+);
+
+-- Consulta do bot: serviços ativos de um cliente.
+CREATE INDEX IF NOT EXISTS idx_servicos_cliente_ativos
+  ON servicos_contratados (cliente_id) WHERE ativo;
+
 -- Etapa 4: história 2.1 (motivo da transferência e dados já informados no ticket).
 ALTER TABLE tickets
   ADD COLUMN IF NOT EXISTS motivo text NOT NULL DEFAULT 'PEDIDO_DO_CLIENTE'

@@ -17,6 +17,8 @@ import type { ClassificadorDeIntencao } from "./nucleo/ClassificadorDeIntencao.j
 import { ClassificadorGemini } from "./ia/ClassificadorGemini.js";
 import { ServidorHttp } from "./http/ServidorHttp.js";
 import { ContextoMenuRepositorio } from "./repositorios/ContextoMenuRepositorio.js";
+import { ServicoContratadoRepositorio } from "./repositorios/ServicoContratadoRepositorio.js";
+import { RespostaDeServicoContratado } from "./nucleo/RespostaDeServicoContratado.js";
 // Da sua branch (gerador de respostas):
 import type { GeradorDeResposta } from "./nucleo/GeradorDeResposta.js";
 import { carregarManual } from "./ia/CarregadorDeManual.js";
@@ -84,6 +86,8 @@ async function main(): Promise<void> {
   const fluxoDoOperador = new FluxoDoOperador(canal, fila, autenticador.listarAtendentes(),
       lerVinculosOperadoresWhatsApp(config.operadoresWhatsappJson));
 
+  // O mesmo menu é usado pelo atendimento e pela resposta "sem serviço cadastrado" (história 1.3).
+  const menu = new Menu(topicosDoMenu());
   const atendimento = new Atendimento(
       canal,
       new ClienteRepositorio(banco.pool),
@@ -92,7 +96,7 @@ async function main(): Promise<void> {
       new EventoRepositorio(banco.pool),
       new ContextoMenuRepositorio(banco.pool),
       classificador,
-      new Menu(topicosDoMenu()),
+      menu,
       {
         confiancaMinima: config.iaConfiancaMinima,
         // Avisos ("instabilidade", "muitas mensagens"): no máximo 1 por minuto para cada remetente.
@@ -106,7 +110,8 @@ async function main(): Promise<void> {
       },
       fila,
       gerador,
-      // Regra de transbordo (história 2.1): após N falhas seguidas, oferece atendimento humano.
+      new RespostaDeServicoContratado(new ServicoContratadoRepositorio(banco.pool), menu),
+      // Regra de transbordo: o Chatbot determina o limite de falhas seguidas.
       new Chatbot("wxn", "Assistente WXN", "simples e cordial", LIMITE_TENTATIVAS_PADRAO, true)
   );
   console.log(
