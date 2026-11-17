@@ -4,6 +4,7 @@ import { PoliticaDeReconexao } from "./canais/whatsapp-baileys/PoliticaDeReconex
 import type { CanalMensagens } from "./nucleo/CanalMensagens.js";
 import { RitmoDeDigitacao } from "./canais/RitmoDeDigitacao.js";
 import { Atendimento } from "./nucleo/Atendimento.js";
+import { Chatbot, LIMITE_TENTATIVAS_PADRAO } from "./nucleo/entidades/Chatbot.js";
 import { LimitadorDeTaxa } from "./nucleo/LimitadorDeTaxa.js";
 import { Menu } from "./nucleo/Menu.js";
 import { topicosDoMenu } from "./nucleo/Topicos.js";
@@ -100,9 +101,13 @@ async function main(): Promise<void> {
         // 0 = sem limite de mensagens por remetente.
         limiteDeMensagens:
             config.limiteMensagensPorMinuto > 0 ? new LimitadorDeTaxa(config.limiteMensagensPorMinuto, UM_MINUTO_MS) : null,
+        // História 2.1: antes do ticket, pergunta uma única vez a empresa de quem ainda não informou.
+        perguntarEmpresa: true,
       },
       fila,
-      gerador
+      gerador,
+      // Regra de transbordo (história 2.1): após N falhas seguidas, oferece atendimento humano.
+      new Chatbot("wxn", "Assistente WXN", "simples e cordial", LIMITE_TENTATIVAS_PADRAO, true)
   );
   console.log(
       config.limiteMensagensPorMinuto > 0

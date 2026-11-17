@@ -3,7 +3,7 @@ import { compararNaFila } from "./OrdemDaFila.js";
 import type { RepositorioDeFila } from "./RepositorioDeFila.js";
 import type { Atendente } from "./entidades/Atendente.js";
 import { StatusTicket } from "./entidades/Enums.js";
-import type { PedidoDeAtendimento } from "./PedidoDeAtendimento.js";
+import { validarPedido, type PedidoDeAtendimento } from "./PedidoDeAtendimento.js";
 import type { Mensagem } from "./entidades/Mensagem.js";
 import type { Ticket } from "./entidades/Ticket.js";
 
@@ -14,8 +14,9 @@ export { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila
 export class ServicoDeFila {
   constructor(private readonly repositorio: RepositorioDeFila) {}
 
+  /** Pedido inválido (assunto vazio, motivo desconhecido, dados grandes demais) é recusado antes do banco. */
   async solicitarAtendimentoHumano(conversaId: number, pedido?: PedidoDeAtendimento): Promise<Ticket> {
-    return this.repositorio.enfileirar(conversaId, pedido);
+    return this.repositorio.enfileirar(conversaId, pedido === undefined ? undefined : validarPedido(pedido));
   }
 
   async obterAtendimentoHumano(conversaId: number): Promise<Ticket | null> {
@@ -41,6 +42,11 @@ export class ServicoDeFila {
     // Outra solicitação pode assumir o ticket depois da leitura acima.
     // O repositório confirma o status no momento da atribuição e lança TicketIndisponivelError.
     await this.repositorio.atribuirAtendente(ticketId, atendente.getId());
+  }
+
+  /** Ticket pelo protocolo (com motivo e dados informados), para o cartão de "Novo atendimento". */
+  async obterTicket(ticketId: string): Promise<Ticket> {
+    return this.exigirTicket(ticketId);
   }
 
   async obterHistoricoDoTicket(ticketId: string): Promise<Mensagem[]> {

@@ -60,7 +60,10 @@ test("integração da fila em PostgreSQL isolado", { skip: !url }, async (t) => 
 
   await t.test("schema atualiza uma instalação anterior e pode ser reaplicado sem perder dados", async () => {
     await pool.query(sql.split("-- Etapa 3:")[0].replace(/,\s*-- Conversa.dataCriacao[\s\S]*?criado_em TIMESTAMPTZ NOT NULL DEFAULT now\(\)/, ""));
-    const clienteId = await clientes.obterOuCriar("cliente-de-integracao", "simulado");
+    // SQL direto: o banco aqui é o de antes das migrações (sem endereco_resposta/empresa),
+    // e o ClienteRepositorio atual já grava colunas que só existem depois delas.
+    const { rows: [{ id: clienteId }] } = await pool.query<{ id: number }>(
+      "INSERT INTO clientes (telefone, origem) VALUES ($1, $2) RETURNING id", ["cliente-de-integracao", "simulado"]);
     conversaId = await conversas.obterOuCriarAtual(clienteId);
     await mensagens.registrarEntrada(conversaId, "antiga", "Mensagem anterior à migração");
     const urlMigracao = new URL(url!);

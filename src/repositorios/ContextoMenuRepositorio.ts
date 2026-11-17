@@ -7,7 +7,7 @@ const VALIDADE_PADRAO_MS = 10 * 60_000;
 const MAX_TROCAS = 3;
 
 function estadoVazio(): EstadoDoMenu {
-  return { caminho: [], perguntando: false, historico: [], falhasSeguidas: 0, transferenciaPendente: null };
+  return { caminho: [], perguntando: false, historico: [], falhasSeguidas: 0, transferenciaPendente: null, pedidoAguardandoEmpresa: null };
 }
 
 /** Guarda o estado do menu em conversas.contexto (JSONB), na chave "menu". */
@@ -26,6 +26,7 @@ export class ContextoMenuRepositorio implements RepositorioDeContextoDoMenu {
           historico?: unknown;
           falhasSeguidas?: unknown;
           transferenciaPendente?: unknown;
+          pedidoAguardandoEmpresa?: unknown;
           em?: unknown;
         }
       | null
@@ -40,6 +41,7 @@ export class ContextoMenuRepositorio implements RepositorioDeContextoDoMenu {
       falhasSeguidas:
         typeof bruto.falhasSeguidas === "number" && Number.isInteger(bruto.falhasSeguidas) ? bruto.falhasSeguidas : 0,
       transferenciaPendente: lerTransferenciaPendente(bruto.transferenciaPendente),
+      pedidoAguardandoEmpresa: lerTransferenciaPendente(bruto.pedidoAguardandoEmpresa),
     };
   }
 
@@ -50,6 +52,7 @@ export class ContextoMenuRepositorio implements RepositorioDeContextoDoMenu {
       historico: estado.historico,
       falhasSeguidas: estado.falhasSeguidas ?? 0,
       transferenciaPendente: estado.transferenciaPendente ?? null,
+      pedidoAguardandoEmpresa: estado.pedidoAguardandoEmpresa ?? null,
       em: new Date().toISOString(),
     });
     // jsonb_set preserva as outras chaves do contexto (ex.: o número da demanda, na história 1.4).

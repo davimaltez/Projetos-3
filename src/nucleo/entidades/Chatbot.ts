@@ -19,6 +19,9 @@ export const RESPOSTA_SEM_TOPICO =
  * interface ClassificadorDeIntencao. Aqui o bot LÊ a intenção já gravada na mensagem.
  * Todos os atributos são de configuração: só getters, nenhum setter.
  */
+/** Configuração padrão do assistente: oferece atendimento humano após 2 falhas seguidas. */
+export const LIMITE_TENTATIVAS_PADRAO = 2;
+
 export class Chatbot implements Remetente {
   readonly #id: string;
   readonly #nome: string;
@@ -79,6 +82,15 @@ export class Chatbot implements Remetente {
   }
 
   /**
+   * Regra de transbordo em si: `falhasSeguidas` mensagens seguidas sem entendimento já bastam
+   * para oferecer atendimento humano? Usada pelo Atendimento (contagem guardada no contexto
+   * da conversa) e por deveTransferir (contagem a partir do histórico).
+   */
+  atingiuLimiteDeTentativas(falhasSeguidas: number): boolean {
+    return falhasSeguidas >= this.#limiteTentativas;
+  }
+
+  /**
    * Regra de transbordo: transfere quando as últimas `limiteTentativas` mensagens do
    * cliente ficaram sem tópico reconhecido. Só vale enquanto a conversa está com o bot.
    */
@@ -91,7 +103,7 @@ export class Chatbot implements Remetente {
       if (this.detectarIntencao(doCliente[i]) !== INTENCAO_INDEFINIDA) break;
       falhasSeguidas++;
     }
-    return falhasSeguidas >= this.#limiteTentativas;
+    return this.atingiuLimiteDeTentativas(falhasSeguidas);
   }
 
   getIdentificacao(): string {

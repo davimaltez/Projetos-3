@@ -274,6 +274,8 @@ export class CanalWhatsAppBaileys implements CanalMensagens {
       // telefone quebra com LID e com o "nono dígito" de números antigos do Brasil.
       enderecoResposta: jid,
       texto,
+      // Nome de perfil do WhatsApp: vira clientes.nome para o operador saber com quem fala.
+      nomeExibicao: bruta.pushName?.trim() || undefined,
     };
   }
 

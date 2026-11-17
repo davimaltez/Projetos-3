@@ -74,6 +74,12 @@ export class MigradorDoBanco {
           "migrations/005_operador_no_whatsapp.sql"
       );
 
+      // Historia 2.1: empresa do cliente (nome e empresa aparecem para o operador).
+      await this.aplicar(
+          db,
+          "migrations/006_nome_e_empresa_do_cliente.sql"
+      );
+
       // Verifica se a estrutura principal está disponível.
       await db.query(`
         SELECT

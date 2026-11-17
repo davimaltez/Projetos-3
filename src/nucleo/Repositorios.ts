@@ -23,9 +23,12 @@ export interface DadosDoCliente {
 
 export interface RepositorioDeClientes {
   /** Devolve o id do cliente com esse identificador (telefone, ou LID quando não há telefone); cria se não existir. */
-  obterOuCriar(identificador: string, origem: string, enderecoResposta?: string): Promise<number>;
+  /** `nome` (nome de perfil do canal) só preenche o cadastro quando ainda não há nome. */
+  obterOuCriar(identificador: string, origem: string, enderecoResposta?: string, nome?: string): Promise<number>;
   /** Consulta os dados do cliente para preencher o pedido de transferência. */
   obterPorId?(id: number): Promise<DadosDoCliente | null>;
+  /** Guarda a empresa informada pelo cliente: ela não é perguntada de novo. */
+  salvarEmpresa?(id: number, empresa: string): Promise<void>;
 }
 
 export interface RepositorioDeConversas {
@@ -69,6 +72,8 @@ export interface EstadoDoMenu {
   readonly historico: readonly TrocaDeConversa[];
   readonly falhasSeguidas?: number;
   readonly transferenciaPendente?: TransferenciaPendente | null;
+  /** Transferência já decidida, esperando só o cliente dizer a empresa (perguntada uma única vez). */
+  readonly pedidoAguardandoEmpresa?: TransferenciaPendente | null;
 }
 
 export interface RepositorioDeContextoDoMenu {

@@ -132,3 +132,13 @@ ALTER TABLE tickets
   ADD COLUMN IF NOT EXISTS motivo text NOT NULL DEFAULT 'PEDIDO_DO_CLIENTE'
     CHECK (motivo IN ('PEDIDO_DO_CLIENTE', 'PERGUNTA_SEM_RESPOSTA', 'FALHAS_SEGUIDAS', 'DEMANDA_NAO_ENCONTRADA')),
   ADD COLUMN IF NOT EXISTS dados jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+-- Etapa 4b: operador no WhatsApp (mesmo conteúdo da migração 005): endereço real do cliente
+-- e autoria das respostas humanas. Sem isto, uma instalação nova a partir deste arquivo não tem as colunas.
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS endereco_resposta TEXT;
+ALTER TABLE mensagens ADD COLUMN IF NOT EXISTS atendente_id INTEGER REFERENCES atendentes(id);
+CREATE INDEX IF NOT EXISTS idx_mensagens_atendente ON mensagens(atendente_id)
+    WHERE atendente_id IS NOT NULL;
+
+-- Etapa 5: história 2.1 (empresa informada pelo cliente, perguntada uma única vez).
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS empresa TEXT;
