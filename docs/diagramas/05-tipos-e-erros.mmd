@@ -1,0 +1,70 @@
+---
+title: WXN — Enumerações, serviços contratados e erros
+---
+classDiagram
+  direction LR
+class PrioridadeTicket {
+    <<enumeration>>
+    BAIXA
+    MEDIA
+    ALTA
+    URGENTE
+  }
+  class StatusTicket {
+    <<enumeration>>
+    AGUARDANDO
+    EM_ATENDIMENTO
+    ENCERRADO
+  }
+  class StatusConversa {
+    <<enumeration>>
+    COM_BOT
+    AGUARDANDO_ATENDENTE
+    EM_ATENDIMENTO
+    ENCERRADA
+  }
+  class StatusAtendente {
+    <<enumeration>>
+    DISPONIVEL
+    OCUPADO
+    OFFLINE
+  }
+  class TipoRemetente {
+    <<enumeration>>
+    CLIENTE
+    ATENDENTE
+    CHATBOT
+  }
+  class TipoAtendimento {
+    <<enumeration>>
+    SIMPLIFICADO
+    PERSONALIZADO
+  }
+  class MotivoDaTransferencia {
+    <<enumeration>>
+    PEDIDO_DO_CLIENTE
+    PERGUNTA_SEM_RESPOSTA
+    FALHAS_SEGUIDAS
+    DEMANDA_NAO_ENCONTRADA
+  }
+  class StatusServico {
+    <<type_union>>
+    EM_DIA
+    PENDENTE
+    SUSPENSO
+  }
+  class ServicoContratado {
+    <<interface>>
+    +string nome
+    +string? descricao
+    +StatusServico status
+    +Date dataInicio
+  }
+  class Error { <<external>> }
+  class TicketNaoEncontradoError
+  class TicketIndisponivelError
+  class AtendenteNaoCadastradoError
+  ServicoContratado --> StatusServico
+  Error <|-- TicketNaoEncontradoError
+  Error <|-- TicketIndisponivelError
+  Error <|-- AtendenteNaoCadastradoError

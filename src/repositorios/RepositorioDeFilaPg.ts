@@ -45,6 +45,7 @@ interface LinhaTicket {
   cliente_id: number;
   cliente_nome: string | null;
   cliente_telefone: string;
+  cliente_empresa: string | null;
   atendente_id: number | null;
   atendente_nome: string | null;
   atendente_email: string | null;
@@ -64,7 +65,7 @@ interface LinhaTicket {
 const CONSULTA = `
   SELECT t.id, t.assunto, t.prioridade, t.status, t.motivo, t.dados,
          t.data_abertura, t.data_fechamento, t.resumo_bot, t.conversa_id,
-         c.criado_em AS conversa_criada_em, c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome, cl.telefone AS cliente_telefone,
+         c.criado_em AS conversa_criada_em, c.estado AS estado_conversa, c.cliente_id, cl.nome AS cliente_nome, cl.telefone AS cliente_telefone, cl.empresa AS cliente_empresa,
          t.atendente_id, a.nome AS atendente_nome, a.email AS atendente_email,
          a.status AS atendente_status, a.especialidade AS atendente_especialidade,
          m.id AS mensagem_id, m.texto AS mensagem_texto, m.criado_em AS mensagem_data,
@@ -328,7 +329,7 @@ export class RepositorioDeFilaPg implements RepositorioDeFila {
         grupo = {
           linha, mensagens: [],
           // clientes não tem coluna de e-mail: o cliente reconstituído fica sem e-mail.
-          cliente: new Cliente(linha.cliente_id, linha.cliente_nome, null, linha.cliente_telefone),
+          cliente: new Cliente(linha.cliente_id, linha.cliente_nome, null, linha.cliente_telefone, linha.cliente_empresa),
         };
         grupos.set(linha.id, grupo);
       }

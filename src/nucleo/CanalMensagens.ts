@@ -20,6 +20,8 @@ export interface MensagemRecebida {
   /** Endereço opaco para responder. O núcleo não interpreta, só devolve ao canal. */
   readonly enderecoResposta: string;
   readonly texto: string;
+  /** Nome que o próprio usuário pôs no perfil (no WhatsApp, o pushName). Pode faltar. */
+  readonly nomeExibicao?: string;
 }
 
 export type ManipuladorDeMensagem = (mensagem: MensagemRecebida) => Promise<void>;

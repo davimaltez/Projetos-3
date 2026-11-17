@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Atendimento } from "../Atendimento.js";
+import { Chatbot } from "../entidades/Chatbot.js";
 import type { CanalMensagens, MensagemRecebida } from "../CanalMensagens.js";
 import type { Classificacao, ClassificadorDeIntencao } from "../ClassificadorDeIntencao.js";
 import { LimitadorDeTaxa } from "../LimitadorDeTaxa.js";
@@ -123,7 +124,8 @@ function criarAtendimento(servicos: RepositorioDeServicos | ResolvedorDeResposta
     },
     new ServicoDeFila(new RepositorioDeFilaEmMemoria()),
     null,
-    "responder" in servicos ? servicos : new RespostaDeServicoContratado(servicos, menu)
+    "responder" in servicos ? servicos : new RespostaDeServicoContratado(servicos, menu),
+    new Chatbot("teste", "Bot", "simples", 3, true)
   );
   return { atendimento, canal };
 }

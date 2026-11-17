@@ -75,9 +75,12 @@ export class MigradorDoBanco {
       );
 
       // História 1.3: serviços contratados por cliente.
+      await this.aplicar(db, "migrations/006_servico_contratado.sql");
+
+      // História 2.1: nome e empresa no cartão do operador.
       await this.aplicar(
           db,
-          "migrations/006_servico_contratado.sql"
+          "migrations/007_nome_e_empresa_do_cliente.sql"
       );
 
       // Verifica se a estrutura principal está disponível.

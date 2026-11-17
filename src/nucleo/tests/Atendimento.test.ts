@@ -38,8 +38,13 @@ const GERADOR_FALSO: GeradorDeResposta = {
 function cenario(
   classificador: ClassificadorDeIntencao | null = null,
   gerador: GeradorDeResposta | null = null,
-  clienteCustom: Cliente | null = null
+  clienteCustom: Cliente | null = null,
+  chatbotDoAtendimento?: Chatbot,
+  perguntarEmpresa = false
 ) {
+  /** Empresas gravadas pelo Atendimento (salvarEmpresa) e nomes de perfil recebidos (obterOuCriar). */
+  const empresasSalvas: string[] = [];
+  const nomesRecebidos: (string | undefined)[] = [];
   const cliente = clienteCustom ?? new Cliente(1, "Cliente Teste", "cliente@example.com", "5581999999999", "Empresa WXN");
   const bot = new Chatbot("wxn", "Bot", "simples", 2, true);
   const conversa = new Conversa(1, "simulado", cliente, bot);
@@ -51,12 +56,13 @@ function cenario(
   let estado: EstadoDoMenu = { caminho: [], perguntando: false, historico: [], falhasSeguidas: 0, transferenciaPendente: null };
   const atendimento = new Atendimento(canal,
     {
-      obterOuCriar: async () => 1,
+      obterOuCriar: async (_id, _origem, _endereco, nome) => { nomesRecebidos.push(nome); return 1; },
       obterPorId: async () => ({
         nome: cliente.getNome(),
-        empresa: cliente.getEmpresa(),
+        empresa: empresasSalvas.at(-1) ?? cliente.getEmpresa(),
         telefone: cliente.getTelefone(),
       }),
+      salvarEmpresa: async (_id, empresa) => { empresasSalvas.push(empresa); },
     }, { obterOuCriarAtual: async () => 1 }, {
       registrarEntrada: async (_id, id, texto) => {
         const anterior = entradas.get(id);
@@ -82,12 +88,20 @@ function cenario(
     }, classificador, new Menu(topicosDoMenu()), {
       confiancaMinima: 0.6, limiteDeMensagens: null,
       avisosDeInstabilidade: new LimitadorDeTaxa(1, 60_000), avisosDeExcesso: new LimitadorDeTaxa(1, 60_000),
-    }, fila, gerador);
+      perguntarEmpresa,
+    }, fila, gerador, null, chatbotDoAtendimento);
   const enviar = (texto: string, id = `entrada-${entradas.size + 1}`) => atendimento.processar({
     texto, idExterno: id, remetente: "cliente-simulado", enderecoResposta: "endereco-simulado",
   });
   const ultima = () => canal.enviadas[canal.enviadas.length - 1]?.texto ?? "";
-  return { atendimento, enviar, fila, conversa, canal, entradas, eventos, repositorio, ultima, estado: () => estado, cliente };
+  return { atendimento, enviar, fila, conversa, canal, entradas, eventos, repositorio, ultima, estado: () => estado, cliente,
+    empresasSalvas, nomesRecebidos };
+}
+
+/** Cliente sem empresa cadastrada, com a pergunta da empresa ligada. */
+function cenarioSemEmpresa() {
+  const semEmpresa = new Cliente(1, "Maria Souza", null, "5581999999999");
+  return cenario(null, null, semEmpresa, undefined, true);
 }
 
 test("menu real oferece atendimento humano e a opção 3 cria ticket com histórico", async () => {
@@ -382,6 +396,38 @@ test("2.1 Cenário 3: duas mensagens não reconhecidas consecutivas oferecem hum
   assert.equal(c.estado().transferenciaPendente, null);
 });
 
+test("2.1 Cenário 3: o limite de falhas vem do Chatbot (limiteTentativas = 3 só oferece na 3ª falha)", async () => {
+  const c = cenario(null, null, null, new Chatbot("wxn", "Bot", "simples", 3, true));
+  await c.enviar("99");
+  await c.enviar("98");
+  assert.equal(c.estado().falhasSeguidas, 2);
+  assert.equal(c.estado().transferenciaPendente, null); // com limite 3, duas falhas ainda não oferecem
+  assert.doesNotMatch(c.ultima(), /Deseja falar com um atendente humano/);
+
+  await c.enviar("97");
+  assert.equal(c.estado().falhasSeguidas, 3);
+  assert.match(c.ultima(), /Deseja falar com um atendente humano\?/);
+  assert.equal((await c.fila.listarFila()).length, 0); // ainda sem ticket antes do "sim"
+
+  await c.enviar("sim");
+  const [ticket] = await c.fila.listarFila();
+  assert.equal(ticket.getMotivo(), MotivoDaTransferencia.FALHAS_SEGUIDAS);
+  assert.equal(ticket.getDados().falhasConsecutivas, 3);
+});
+
+test("2.1 Cenário 3: o limite do Chatbot vale também quando a IA fica incerta", async () => {
+  const incerto: ClassificadorDeIntencao = {
+    nome: "incerto",
+    classificar: async () => ({ topico: null, confianca: 0.1 }),
+    ...ESCOLHA_VAZIA,
+  };
+  const c = cenario(incerto, null, null, new Chatbot("wxn", "Bot", "simples", 1, true));
+  await c.enviar("blablabla");
+  assert.equal(c.estado().falhasSeguidas, 1);
+  assert.equal(c.estado().transferenciaPendente?.motivo, MotivoDaTransferencia.FALHAS_SEGUIDAS);
+  assert.match(c.ultima(), /Deseja falar com um atendente humano\?/);
+});
+
 test("2.1 Cenário 3: falha técnica da IA (ia_falhou) não incrementa o contador de falhas consecutivas", async () => {
   const quebrado: ClassificadorDeIntencao = {
     nome: "quebrado",
@@ -472,4 +518,104 @@ test("2.1: falha antes de salvar estado (ticket já criado na fila) recupera o m
   assert.equal(tickets[0].getProtocolo(), ticketCriado.getProtocolo());
   assert.ok(c.ultima().includes(ticketCriado.getProtocolo()));
   assert.equal(c.estado().transferenciaPendente, null);
+});
+// ---------------------------------------------------------------- 2.1: nome e empresa do cliente
+
+test("2.1 empresa: sem empresa cadastrada, o bot pergunta antes de abrir o ticket e grava a resposta", async () => {
+  const c = cenarioSemEmpresa();
+  await c.enviar("atendente");
+  assert.equal((await c.fila.listarFila()).length, 0); // ainda sem ticket
+  assert.match(c.ultima(), /qual é o nome da sua empresa\?/);
+  assert.ok(c.estado().pedidoAguardandoEmpresa);
+
+  await c.enviar("  Padaria   Boa ");
+  const [ticket] = await c.fila.listarFila();
+  assert.ok(ticket);
+  assert.equal(ticket.getMotivo(), MotivoDaTransferencia.PEDIDO_DO_CLIENTE);
+  assert.equal(ticket.getDados().empresa, "Padaria Boa");
+  assert.deepEqual(c.empresasSalvas, ["Padaria Boa"]); // fica no cadastro: não é perguntada de novo
+  assert.match(c.ultima(), new RegExp(`Protocolo: ${ticket.getProtocolo()}`));
+  assert.equal(c.estado().pedidoAguardandoEmpresa, null);
+});
+
+test("2.1 empresa: depois de 2 falhas e 'sim', pergunta a empresa e o ticket mantém motivo e prioridade", async () => {
+  const c = cenarioSemEmpresa();
+  await c.enviar("99");
+  await c.enviar("98");
+  await c.enviar("sim");
+  assert.equal((await c.fila.listarFila()).length, 0);
+  assert.match(c.ultima(), /qual é o nome da sua empresa\?/);
+
+  await c.enviar("Mercado Central");
+  const [ticket] = await c.fila.listarFila();
+  assert.equal(ticket.getMotivo(), MotivoDaTransferencia.FALHAS_SEGUIDAS);
+  assert.equal(ticket.getPrioridade(), PrioridadeTicket.ALTA);
+  assert.equal(ticket.getDados().empresa, "Mercado Central");
+  assert.equal(ticket.getDados().ultimaTentativa, "98");
+});
+
+test("2.1 empresa: 'pular' abre o ticket sem empresa e nada é gravado", async () => {
+  const c = cenarioSemEmpresa();
+  await c.enviar("atendente");
+  await c.enviar("pular");
+  const [ticket] = await c.fila.listarFila();
+  assert.ok(ticket);
+  assert.equal(ticket.getDados().empresa, null);
+  assert.deepEqual(c.empresasSalvas, []);
+});
+
+test("2.1 empresa: 'cancelar' desiste da transferência e volta ao menu", async () => {
+  const c = cenarioSemEmpresa();
+  await c.enviar("atendente");
+  await c.enviar("cancelar");
+  assert.equal((await c.fila.listarFila()).length, 0);
+  assert.equal(c.estado().pedidoAguardandoEmpresa, null);
+  assert.match(c.ultima(), /Tudo bem! Vamos continuar por aqui/);
+});
+
+test("2.1 empresa: quem já tem empresa cadastrada não é perguntado", async () => {
+  const c = cenario(null, null, null, undefined, true); // cliente padrão tem "Empresa WXN"
+  await c.enviar("atendente");
+  const [ticket] = await c.fila.listarFila();
+  assert.ok(ticket);
+  assert.equal(ticket.getDados().empresa, "Empresa WXN");
+  assert.doesNotMatch(c.canal.enviadas.map((m) => m.texto).join("\n"), /nome da sua empresa/);
+});
+
+test("2.1 empresa: novo pedido com ticket já aberto devolve o protocolo sem perguntar a empresa", async () => {
+  const c = cenarioSemEmpresa();
+  await c.enviar("atendente");
+  await c.enviar("pular");
+  const [ticket] = await c.fila.listarFila();
+  await c.enviar("atendente");
+  assert.match(c.ultima(), new RegExp(`Protocolo: ${ticket.getProtocolo()}`));
+  assert.equal((await c.fila.listarFila()).length, 1);
+});
+
+test("2.1 nome: o nome de perfil do canal chega ao cadastro do cliente", async () => {
+  const c = cenario();
+  await c.atendimento.processar({
+    idExterno: "com-nome", remetente: "cliente-simulado", enderecoResposta: "endereco-simulado",
+    texto: "oi", nomeExibicao: "Maria Souza",
+  });
+  assert.deepEqual(c.nomesRecebidos, ["Maria Souza"]);
+});
+
+test("2.1: pergunta muito longa ainda vira ticket (texto do cliente é resumido nos dados)", async () => {
+  const c = cenario(null, GERADOR_FALSO);
+  await c.enviar("2");
+  await c.enviar("3");
+  await c.enviar(`como emito nota fiscal ${"detalhe ".repeat(1_000)}`); // ~8.000 caracteres
+  await c.enviar("sim");
+  const [ticket] = await c.fila.listarFila();
+  assert.ok(ticket, "a validação do pedido não pode barrar a transferência por causa do tamanho do texto");
+  assert.equal(String(ticket.getDados().ultimaPergunta).length, 300);
+});
+
+test("2.1: pedido inválido é recusado pelo ServicoDeFila antes do repositório", async () => {
+  const c = cenario();
+  await assert.rejects(c.fila.solicitarAtendimentoHumano(1, {
+    assunto: "   ", prioridade: PrioridadeTicket.MEDIA, motivo: MotivoDaTransferencia.PEDIDO_DO_CLIENTE, dados: {},
+  }), /assunto/);
+  assert.equal((await c.fila.listarFila()).length, 0);
 });

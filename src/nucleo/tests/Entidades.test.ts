@@ -324,6 +324,14 @@ describe("Chatbot", () => {
     assert.equal(resposta.getTexto(), RESPOSTA_SEM_TOPICO);
   });
 
+  test("atingiuLimiteDeTentativas compara a contagem com limiteTentativas", () => {
+    const bot = novoBot(3);
+    assert.equal(bot.atingiuLimiteDeTentativas(0), false);
+    assert.equal(bot.atingiuLimiteDeTentativas(2), false);
+    assert.equal(bot.atingiuLimiteDeTentativas(3), true);
+    assert.equal(bot.atingiuLimiteDeTentativas(4), true);
+  });
+
   describe("deveTransferir", () => {
     function conversaCom(intencoesDoCliente: (string | undefined)[], limite = 2): { bot: Chatbot; conversa: Conversa } {
       const bot = novoBot(limite);

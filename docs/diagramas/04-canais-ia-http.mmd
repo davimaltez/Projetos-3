@@ -1,0 +1,81 @@
+---
+title: WXN — Canal WhatsApp, IA, HTTP e configuração
+---
+classDiagram
+  direction TB
+class CanalMensagens { <<interface>> }
+  class CanalWhatsAppBaileys {
+    +string nome
+    -WASocket socket
+    -boolean conectado
+    -RitmoDeDigitacao ritmo
+    -PoliticaDeReconexao reconexao
+    +iniciar(aoReceber) Promise~void~
+    +indicarDigitando(endereco) Promise~void~
+    +enviarTexto(endereco, texto) Promise~string~
+    +estaConectado() boolean
+    +encerrar() Promise~void~
+  }
+  class RitmoDeDigitacao {
+    -number minimoMs
+    -number maximoMs
+    +duracaoMs(texto) number
+  }
+  class PoliticaDeReconexao {
+    +number tentativasRapidas
+    +number intervaloLentoMs
+    +emModoLento(tentativas) boolean
+    +atrasoMs(tentativas) number
+  }
+  class ClassificadorDeIntencao { <<interface>> }
+  class ClassificadorGemini {
+    +string nome
+    -GoogleGenAI cliente
+    +classificar(texto, topicos) Promise~Classificacao~
+    +escolherOpcao(texto, opcoes) Promise~EscolhaDeOpcao~
+  }
+  class GeradorDeResposta { <<interface>> }
+  class GeradorGemini {
+    +string nome
+    -GoogleGenAI cliente
+    -string instrucoes
+    +gerar(pergunta, historico) Promise~RespostaGerada~
+  }
+  class ServidorHttp {
+    -number porta
+    -string host
+    -Express app
+    -Server servidor
+    +iniciar() Promise~void~
+    +encerrar() Promise~void~
+  }
+  class AutenticadorDeOperador {
+    -Object[] operadores
+    +listarAtendentes() Atendente[]
+    +autenticar(autorizacao) Atendente?
+  }
+  class ServicoDeFila
+  class BancoDeDados
+  class Atendente
+  class Config {
+    +number porta
+    +string httpHost
+    +string databaseUrl
+    +string pastaSessaoWhatsApp
+    +string? geminiApiKey
+    +string geminiModelo
+    +string manualCaminho
+    +string operadoresHttpJson
+    +string operadoresWhatsappJson
+    +carregar(env)$ Config
+  }
+  CanalMensagens <|.. CanalWhatsAppBaileys
+  CanalWhatsAppBaileys --> RitmoDeDigitacao
+  CanalWhatsAppBaileys --> PoliticaDeReconexao
+  ClassificadorDeIntencao <|.. ClassificadorGemini
+  GeradorDeResposta <|.. GeradorGemini
+  ServidorHttp --> CanalMensagens : consulta conexao
+  ServidorHttp --> BancoDeDados : consulta disponibilidade
+  ServidorHttp --> ServicoDeFila : operacoes HTTP
+  ServidorHttp --> AutenticadorDeOperador
+  AutenticadorDeOperador --> Atendente : identifica
