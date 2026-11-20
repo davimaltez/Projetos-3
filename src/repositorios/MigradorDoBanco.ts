@@ -83,6 +83,12 @@ export class MigradorDoBanco {
           "migrations/007_nome_e_empresa_do_cliente.sql"
       );
 
+      // Historia 3.3: nota de satisfação usada no relatório do gestor.
+      await this.aplicar(
+          db,
+          "migrations/008_avaliacao_de_satisfacao.sql"
+      );
+
       // Verifica se a estrutura principal está disponível.
       await db.query(`
         SELECT

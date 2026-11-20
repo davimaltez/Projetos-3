@@ -8,10 +8,12 @@ import type { ServicoDeFila } from "./ServicoDeFila.js";
 import { Chatbot, LIMITE_TENTATIVAS_PADRAO } from "./entidades/Chatbot.js";
 import { MotivoDaTransferencia, PrioridadeTicket, StatusTicket } from "./entidades/Enums.js";
 import { ASSUNTO_PADRAO, type PedidoDeAtendimento } from "./PedidoDeAtendimento.js";
+import { lerNota, TEXTO_AGRADECIMENTO_AVALIACAO } from "./PesquisaDeSatisfacao.js";
 import { mascararRemetente, resumirTextoParaLog } from "./PrivacidadeDeLog.js";
 import type {
   DadosDoCliente,
   EstadoDoMenu,
+  RepositorioDeAvaliacoes,
   RepositorioDeClientes,
   RepositorioDeContextoDoMenu,
   RepositorioDeConversas,
@@ -90,6 +92,11 @@ export interface OpcoesDeAtendimento {
    * (exige RepositorioDeClientes.salvarEmpresa). Padrão: false.
    */
   perguntarEmpresa?: boolean;
+  /**
+   * História 3.3: avaliações pendentes (nota pedida quando o operador encerra). Com isto, um "1" a "5"
+   * do cliente logo depois do encerramento vira a nota em vez de opção do menu. null/ausente = desligado.
+   */
+  avaliacoes?: RepositorioDeAvaliacoes | null;
 }
 
 /** Enviado quando o banco falha antes de a mensagem ser registrada. Linguagem simples (história 1.6). */
@@ -210,6 +217,9 @@ export class Atendimento {
     if (registro === null) return; // já processada (respondida e gravada): não responder de novo
     const { conversaId, entradaId, clienteId } = registro;
 
+    // História 3.3: resposta à pergunta "que nota você dá?" feita no encerramento do atendimento humano.
+    if (await this.receberAvaliacao(mensagem, conversaId, entradaId, clienteId)) return;
+
     // História 1.1: em que nível do menu o cliente está e se está no modo pergunta.
     const estadoAnterior = await this.estadoAtual(conversaId);
     const humano = await this.operarFila(mensagem, () => this.fila.obterAtendimentoHumano(conversaId));
@@ -311,6 +321,54 @@ export class Atendimento {
       },
     });
     await this.mensagens.marcarProcessada(entradaId);
+  }
+
+  /**
+   * Se o cliente tem uma avaliação pendente e mandou uma nota de 1 a 5, grava a nota e agradece
+   * (true = mensagem tratada). Qualquer outro texto descarta a pendência e segue o atendimento
+   * normal: o cliente não fica preso numa pesquisa que não quer responder.
+   */
+  private async receberAvaliacao(
+      mensagem: MensagemRecebida, conversaId: number, entradaId: number, clienteId: number
+  ): Promise<boolean> {
+    const avaliacoes = this.opcoes.avaliacoes;
+    if (!avaliacoes) return false;
+    let ticketId: string | null;
+    try {
+      ticketId = await avaliacoes.pendenteDoCliente(clienteId);
+    } catch (erro) {
+      // Sem a pesquisa, o cliente ainda é atendido normalmente.
+      console.warn("[atendimento] não consegui consultar a avaliação pendente:", erro instanceof Error ? erro.message : erro);
+      return false;
+    }
+    if (!ticketId) return false;
+
+    const nota = lerNota(mensagem.texto);
+    if (nota === null) {
+      try {
+        await avaliacoes.descartar(ticketId);
+      } catch (erro) {
+        console.warn("[atendimento] não consegui descartar a avaliação pendente:", erro instanceof Error ? erro.message : erro);
+      }
+      return false;
+    }
+
+    // Agradece antes de gravar: se o envio falhar, a pendência continua e a reentrega da mesma mensagem vira nota.
+    const saidaId = await this.canal.enviarTexto(mensagem.enderecoResposta, TEXTO_AGRADECIMENTO_AVALIACAO);
+    await avaliacoes.registrarNota(ticketId, nota);
+    await this.mensagens.registrarSaida(conversaId, saidaId, TEXTO_AGRADECIMENTO_AVALIACAO);
+    await this.eventos.registrar({
+      conversaId,
+      tipo: "avaliacao",
+      origem: "pesquisa_satisfacao",
+      caminho: null,
+      intencao: null,
+      usouLlm: false,
+      dados: { mensagemId: entradaId, ticketId, nota },
+    });
+    await this.mensagens.marcarProcessada(entradaId);
+    console.log(`[atendimento] ${mascararRemetente(mensagem.remetente)} avaliou o atendimento ${ticketId} com nota ${nota}`);
+    return true;
   }
 
   /**

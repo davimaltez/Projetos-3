@@ -62,6 +62,17 @@ export interface RepositorioDeEventos {
   registrar(evento: NovoEvento): Promise<void>;
 }
 
+/** Nota de satisfação pedida ao cliente quando o atendimento humano é encerrado (história 3.3). */
+export interface RepositorioDeAvaliacoes {
+  /** Registra que a nota foi pedida para esse ticket (situação PENDENTE). */
+  solicitar(ticketId: string): Promise<void>;
+  /** Ticket da avaliação pendente mais recente do cliente, dentro do prazo de resposta; null se não houver. */
+  pendenteDoCliente(clienteId: number): Promise<string | null>;
+  registrarNota(ticketId: string, nota: number): Promise<void>;
+  /** O cliente respondeu outra coisa ou a pergunta não chegou: a avaliação deixa de esperar. */
+  descartar(ticketId: string): Promise<void>;
+}
+
 /** Onde o cliente está no menu e se está no modo "escreva sua pergunta". */
 export interface EstadoDoMenu {
   /** Ids do topo até o nível atual. Vazio = menu principal. */

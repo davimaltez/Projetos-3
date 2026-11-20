@@ -164,3 +164,17 @@ CREATE INDEX IF NOT EXISTS idx_mensagens_atendente ON mensagens(atendente_id)
 
 -- Etapa 5: história 2.1 (empresa informada pelo cliente, perguntada uma única vez).
 ALTER TABLE clientes ADD COLUMN IF NOT EXISTS empresa TEXT;
+
+-- Etapa 6: história 3.3 (nota de satisfação; mesmo conteúdo da migração 008).
+CREATE TABLE IF NOT EXISTS avaliacoes (
+  ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id),
+  nota SMALLINT CHECK (nota BETWEEN 1 AND 5),
+  situacao TEXT NOT NULL DEFAULT 'PENDENTE'
+    CHECK (situacao IN ('PENDENTE', 'RESPONDIDA', 'DESCARTADA')),
+  solicitada_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  respondida_em TIMESTAMPTZ,
+  CHECK ((situacao = 'RESPONDIDA') = (nota IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_avaliacoes_pendentes
+  ON avaliacoes (cliente_id, solicitada_em DESC) WHERE situacao = 'PENDENTE';
