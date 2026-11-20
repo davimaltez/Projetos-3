@@ -73,6 +73,11 @@ export class ServicoDeFila {
     await this.repositorio.registrarRespostaDoAtendente(ticketId, atendente.getId(), idEnviado, resposta);
   }
 
+  /** Endereço do cliente, só para o operador responsável (usado na pesquisa de satisfação). */
+  async obterDestinoDoCliente(ticketId: string, atendente: Atendente): Promise<string | null> {
+    return this.repositorio.obterDestinoDoCliente(ticketId, atendente.getId());
+  }
+
   async encerrarAtendimento(ticketId: string, atendente: Atendente): Promise<void> {
     await this.repositorio.encerrarTicket(ticketId, atendente.getId());
   }

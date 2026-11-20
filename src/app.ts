@@ -29,6 +29,13 @@ import { AtendenteRepositorio } from "./repositorios/AtendenteRepositorio.js";
 import { ServicoDeFila } from "./nucleo/ServicoDeFila.js";
 import { FluxoDoOperador, lerVinculosOperadoresWhatsApp } from "./nucleo/FluxoDoOperador.js";
 import { AutenticadorDeOperador } from "./http/AutenticadorDeOperador.js";
+// História 3.3 (relatório do gestor e nota de satisfação):
+import { FluxoDoGestor, lerGestores } from "./nucleo/FluxoDoGestor.js";
+import type { EnviadorDeEmail } from "./nucleo/EnviadorDeEmail.js";
+import { PesquisaDeSatisfacao } from "./nucleo/PesquisaDeSatisfacao.js";
+import { EnviadorDeEmailNoConsole, EnviadorDeEmailSmtp } from "./email/EnviadorDeEmailSmtp.js";
+import { AvaliacaoRepositorio } from "./repositorios/AvaliacaoRepositorio.js";
+import { RelatorioRepositorio } from "./repositorios/RelatorioRepositorio.js";
 
 const UM_MINUTO_MS = 60_000;
 
@@ -48,6 +55,7 @@ async function main(): Promise<void> {
   try {
     await banco.pool.query(`SELECT t.id, c.criado_em FROM tickets t
       JOIN conversas c ON c.id = t.conversa_id LIMIT 0`);
+    await banco.pool.query("SELECT ticket_id, nota, situacao FROM avaliacoes LIMIT 0");
   } catch {
     throw new Error("Estrutura da fila indisponível. Execute `npm run db:migrate` e confira o acesso ao banco.");
   }
@@ -83,8 +91,33 @@ async function main(): Promise<void> {
 
   await new AtendenteRepositorio(banco.pool).cadastrar(autenticador.listarAtendentes());
   const fila = new ServicoDeFila(new RepositorioDeFilaPg(banco.pool));
+  // História 3.3: nota de satisfação pedida no encerramento; a média entra no relatório do gestor.
+  const avaliacoes = new AvaliacaoRepositorio(banco.pool);
   const fluxoDoOperador = new FluxoDoOperador(canal, fila, autenticador.listarAtendentes(),
-      lerVinculosOperadoresWhatsApp(config.operadoresWhatsappJson));
+      lerVinculosOperadoresWhatsApp(config.operadoresWhatsappJson), undefined,
+      new PesquisaDeSatisfacao(canal, avaliacoes));
+
+  // História 3.3: relatório do gestor, liberado por código de uso único enviado ao e-mail cadastrado.
+  const gestores = lerGestores(config.gestoresJson);
+  let fluxoDoGestor: FluxoDoGestor | null = null;
+  if (gestores.length > 0 && config.emailModo !== "desligado") {
+    const email: EnviadorDeEmail = config.emailModo === "smtp"
+        ? new EnviadorDeEmailSmtp({
+          host: config.smtpHost!,
+          porta: config.smtpPorta,
+          seguro: config.smtpSeguro,
+          usuario: config.smtpUsuario,
+          senha: config.smtpSenha,
+          remetente: config.emailRemetente,
+        })
+        : new EnviadorDeEmailNoConsole();
+    fluxoDoGestor = new FluxoDoGestor(canal, email, new RelatorioRepositorio(banco.pool, config.fusoHorario), gestores,
+        { fusoHorario: config.fusoHorario });
+    console.log(`[app] relatório do gestor ativo para ${gestores.length} gestor(es), e-mail via ${email.nome}`);
+    if (email.nome === "console") console.warn("[app] EMAIL_MODO=console: os códigos aparecem no log. Use só em desenvolvimento.");
+  } else if (gestores.length > 0) {
+    console.warn("[app] GESTORES_JSON preenchido, mas sem SMTP_HOST (nem EMAIL_MODO=console): relatório do gestor desligado");
+  }
 
   // O mesmo menu é usado pelo atendimento e pela resposta "sem serviço cadastrado" (história 1.3).
   const menu = new Menu(topicosDoMenu());
@@ -107,6 +140,7 @@ async function main(): Promise<void> {
             config.limiteMensagensPorMinuto > 0 ? new LimitadorDeTaxa(config.limiteMensagensPorMinuto, UM_MINUTO_MS) : null,
         // História 2.1: antes do ticket, pergunta uma única vez a empresa de quem ainda não informou.
         perguntarEmpresa: true,
+        avaliacoes,
       },
       fila,
       gerador,
@@ -123,6 +157,8 @@ async function main(): Promise<void> {
   const http = new ServidorHttp(config.porta, config.httpHost, canal, banco, classificador !== null, fila, autenticador);
   await http.iniciar(); // porta ocupada = erro claro AQUI, antes de conectar o WhatsApp
   await canal.iniciar(async (mensagem) => {
+    // O gestor vem antes: ele só intercepta pedido de relatório e código; o resto segue adiante.
+    if (fluxoDoGestor && await fluxoDoGestor.processarSeGestor(mensagem)) return;
     if (await fluxoDoOperador.processarSeOperador(mensagem)) return;
     await atendimento.processar(mensagem);
   });

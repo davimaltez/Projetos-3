@@ -4,6 +4,7 @@ import type { Atendente } from "./entidades/Atendente.js";
 import { MotivoDaTransferencia } from "./entidades/Enums.js";
 import type { Ticket } from "./entidades/Ticket.js";
 import { TicketIndisponivelError, TicketNaoEncontradoError } from "./ErrosDaFila.js";
+import type { PesquisaDeSatisfacao } from "./PesquisaDeSatisfacao.js";
 
 /** Como o motivo do escalonamento aparece para o operador (história 2.1). */
 export const ROTULO_DO_MOTIVO: Readonly<Record<MotivoDaTransferencia, string>> = {
@@ -47,7 +48,8 @@ export interface VinculoOperadorWhatsApp {
     readonly telefone: string;
 }
 
-function normalizarTelefone(entrada: string): string | null {
+/** Também usado pelo FluxoDoGestor: as duas permissões seguem a mesma regra de telefone. */
+export function normalizarTelefone(entrada: string): string | null {
     // Recusa LID e identificadores de outros canais; não confunde um ID anônimo com telefone.
     const texto = entrada.replace(/@s\.whatsapp\.net$/, "");
     const numero = texto.startsWith("+") ? texto.slice(1) : texto;
@@ -73,6 +75,8 @@ export class FluxoDoOperador {
         vinculos: readonly VinculoOperadorWhatsApp[],
         /** Relógio do tempo de espera; os testes passam um horário fixo. */
         private readonly agora: () => Date = () => new Date(),
+        /** História 3.3: ao encerrar, pede ao cliente a nota de satisfação. null = não pergunta. */
+        private readonly pesquisa: PesquisaDeSatisfacao | null = null,
     ) {
         const porId = new Map(atendentes.map(a => [Number(a.getId()), a]));
         for (const vinculo of vinculos) {
@@ -123,6 +127,10 @@ export class FluxoDoOperador {
                 await this.canal.enviarTexto(mensagem.enderecoResposta, 'Você não possui atendimento ativo. Envie "fila".');
                 return;
             }
+            // O endereço só é liberado ao operador responsável enquanto o ticket está em atendimento: lê antes de encerrar.
+            const destinoDoCliente = this.pesquisa
+                ? await this.fila.obterDestinoDoCliente(ativo, atendente).catch(() => null)
+                : null;
             try {
                 await this.fila.encerrarAtendimento(ativo, atendente);
             } catch (erro) {
@@ -136,6 +144,14 @@ export class FluxoDoOperador {
             this.selecoes.delete(telefone);
             await this.canal.enviarTexto(mensagem.enderecoResposta,
                 `Atendimento ${ativo} encerrado. Envie "fila" para consultar novos casos.`);
+            if (this.pesquisa && destinoDoCliente) {
+                // O atendimento já está encerrado: falha na pesquisa só vai para o log.
+                try {
+                    await this.pesquisa.pedirNota(ativo, destinoDoCliente);
+                } catch (erro) {
+                    console.warn("[operador] não consegui pedir a nota de satisfação:", erro instanceof Error ? erro.message : erro);
+                }
+            }
             return;
         }
 
