@@ -152,7 +152,8 @@ export const TOPICOS: readonly Topico[] = [
     descricao:
       "Um administrador pede números da operação do chatbot: total de atendimentos, satisfação, volume por dia ou horário, tópicos mais perguntados.",
     respostaProvisoria:
-      "Recebi seu pedido de relatório. Essa função ainda está sendo preparada e em breve estará disponível por aqui.",
+      // Gestores cadastrados (GESTORES_JSON) são atendidos antes, pelo FluxoDoGestor (história 3.3).
+      "O relatório de atendimentos é exclusivo para gestores cadastrados da WXN.",
     ativo: true,
     somenteAdmin: true,
   },

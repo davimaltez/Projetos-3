@@ -36,7 +36,43 @@ export class Config {
   readonly operadoresHttpJson: string;
   readonly operadoresWhatsappJson: string;
 
+  // História 3.3: relatório do gestor.
+  readonly gestoresJson: string;
+  /** smtp = envia de verdade; console = só escreve no terminal (desenvolvimento); desligado = sem relatório. */
+  readonly emailModo: "smtp" | "console" | "desligado";
+  readonly smtpHost: string | undefined;
+  readonly smtpPorta: number;
+  readonly smtpSeguro: boolean;
+  readonly smtpUsuario: string | undefined;
+  readonly smtpSenha: string | undefined;
+  readonly emailRemetente: string;
+  /** Fuso dos dias/horários de pico e da data do relatório. */
+  readonly fusoHorario: string;
+
   private constructor(env: NodeJS.ProcessEnv) {
+    this.gestoresJson = env.GESTORES_JSON?.trim() || "[]";
+    this.smtpHost = env.SMTP_HOST?.trim() || undefined;
+    this.smtpPorta = Config.numero(env, "SMTP_PORTA", 587, { minimo: 1, maximo: 65_535, inteiro: true });
+    this.smtpSeguro = (env.SMTP_SEGURO?.trim().toLowerCase() || (this.smtpPorta === 465 ? "true" : "false")) === "true";
+    this.smtpUsuario = env.SMTP_USUARIO?.trim() || undefined;
+    this.smtpSenha = env.SMTP_SENHA || undefined;
+    this.emailRemetente = env.EMAIL_REMETENTE?.trim() || this.smtpUsuario || "";
+    const modo = env.EMAIL_MODO?.trim().toLowerCase();
+    if (modo && modo !== "smtp" && modo !== "console") {
+      throw new Error(`EMAIL_MODO deve ser "smtp" ou "console" (recebido: "${env.EMAIL_MODO}").`);
+    }
+    this.emailModo = modo === "console" ? "console" : this.smtpHost ? "smtp" : "desligado";
+    if (modo === "smtp" && !this.smtpHost) throw new Error("EMAIL_MODO=smtp exige SMTP_HOST.");
+    if (this.emailModo === "smtp" && !this.emailRemetente) {
+      throw new Error("Defina EMAIL_REMETENTE (ou SMTP_USUARIO) para enviar e-mails.");
+    }
+    this.fusoHorario = env.FUSO_HORARIO?.trim() || "America/Sao_Paulo";
+    try {
+      new Intl.DateTimeFormat("pt-BR", { timeZone: this.fusoHorario });
+    } catch {
+      throw new Error(`FUSO_HORARIO inválido (recebido: "${this.fusoHorario}"). Exemplo: America/Sao_Paulo.`);
+    }
+
     this.operadoresHttpJson = env.OPERADORES_HTTP_JSON?.trim() || "[]";
     this.operadoresWhatsappJson = env.OPERADORES_WHATSAPP_JSON?.trim() || "[]";
     this.digitandoMinimoMs = Config.numero(env, "DIGITANDO_MIN_MS", 1_500, { minimo: 0 });
